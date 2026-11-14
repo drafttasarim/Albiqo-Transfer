@@ -20,7 +20,7 @@ public sealed class MainWindow : Form
     private readonly Button chooseFolder = new() { Text = "…", Width = 44, Height = 32 };
     private readonly DataGridView albums = new() { Dock = DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true, MultiSelect = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false, BorderStyle = BorderStyle.None };
     private readonly Label status = new() { AutoSize = false, Dock = DockStyle.Fill, Height = 48 };
-    private readonly Label hint = new() { AutoSize = true, MaximumSize = new Size(900, 0) };
+    private readonly Label hint = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
     private readonly ProgressBar progress = new() { Dock = DockStyle.Fill, Maximum = 1000, Height = 12 };
     private readonly Label progressText = new() { AutoSize = true };
     private readonly Button save = new() { AutoSize = false, Width = 200, Height = 48, Enabled = false };
@@ -50,6 +50,7 @@ public sealed class MainWindow : Form
         usbSetup.AccessibleDescription = T("USB için gereken Apple sürücüsünü Microsoft Store'dan kur. iTunes gerekmez.", "Install Apple's required USB driver from Microsoft Store. iTunes is not required.");
         save.BackColor = Teal; save.ForeColor = Ink;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28), RowCount = 9, ColumnCount = 1 };
+        layout.ColumnStyles.Add(new(SizeType.Percent, 100));
         layout.RowStyles.Add(new(SizeType.Absolute, 78));
         layout.RowStyles.Add(new(SizeType.Absolute, 50));
         layout.RowStyles.Add(new(SizeType.Absolute, 56));
