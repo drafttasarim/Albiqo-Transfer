@@ -1,0 +1,52 @@
+name: Build Albiqo Transfer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/**", "tests/**", "Directory.Build.props", ".github/workflows/windows-build.yml"]
+  pull_request:
+    paths: ["src/**", "tests/**", "Directory.Build.props", ".github/workflows/windows-build.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Protocol, tunnel and verified resume checks
+        run: dotnet run --project tests/Albiqo.Transfer.SelfTests/Albiqo.Transfer.SelfTests.csproj -c Release
+      - name: Build self-contained x64
+        run: dotnet publish src/Albiqo.Transfer.Windows/Albiqo.Transfer.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableWindowsTargeting=true -o artifacts/win-x64
+      - name: Build self-contained ARM64
+        run: dotnet publish src/Albiqo.Transfer.Windows/Albiqo.Transfer.Windows.csproj -c Release -r win-arm64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableWindowsTargeting=true -o artifacts/win-arm64
+      - name: Windows runtime and layout smoke check
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath (Resolve-Path artifacts/win-x64/AlbiqoTransfer.exe) -ArgumentList '--smoke-test', 'artifacts/ui-proof' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Windows UI smoke check failed: $($process.ExitCode)" }
+      - name: Create portable ZIPs and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/packages | Out-Null
+          foreach ($arch in @('win-x64', 'win-arm64')) {
+            Copy-Item README.md "artifacts/$arch/README.md"
+            Copy-Item PRIVACY.md "artifacts/$arch/PRIVACY.md"
+            Copy-Item third-party "artifacts/$arch/third-party" -Recurse
+            Compress-Archive -Path "artifacts/$arch/AlbiqoTransfer.exe", "artifacts/$arch/README.md", "artifacts/$arch/PRIVACY.md", "artifacts/$arch/third-party" -DestinationPath "artifacts/packages/Albiqo-Transfer-0.1.0-preview-$arch.zip"
+          }
+          Get-ChildItem artifacts/packages/*.zip | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } | Set-Content artifacts/packages/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Albiqo-Transfer-0.1.0-preview-Windows
+          path: |
+            artifacts/packages/*
+            artifacts/ui-proof/*
+          if-no-files-found: error
+          retention-days: 30
+
