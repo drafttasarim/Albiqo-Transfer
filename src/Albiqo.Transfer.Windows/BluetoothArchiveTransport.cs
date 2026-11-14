@@ -13,7 +13,7 @@ public sealed record NearbyPhone(ulong Address, string Name)
     public override string ToString() => Name;
 }
 
-public sealed class BluetoothArchiveTransport : IArchiveTransport
+public sealed class BluetoothArchiveTransport : IArchiveTransport, IMediaTransport
 {
     private readonly BluetoothLEDevice device;
     private readonly GattDeviceService service;
@@ -26,6 +26,8 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport
     private bool disposed;
     public string DisplayName => "Bluetooth · " + device.Name;
     public int PreferredReadSize => Math.Clamp((session.MaxPduSize - 3 - BleProtocol.ResponseHeaderSize) * 32, 512, 16384);
+
+    public int PreferredMediaChunkSize => PreferredReadSize;
 
     private sealed class PendingResponse(uint id, long offset, int length)
     {
@@ -116,7 +118,7 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport
         if (pin.Length != 6 || pin.Any(c => c is < '0' or > '9')) throw new ArgumentException("Enter the six-digit code shown in Albiqo.");
         var bytes = await RequestAsync(id => new { id, op = "auth", pin }, 0, 32768, false, token);
         var result = TransferJson.Decode<TransferSession>(bytes);
-        if (result.ProtocolVersion != 1) throw new InvalidDataException("Unsupported phone protocol.");
+        if (result.ProtocolVersion is not (1 or 2)) throw new InvalidDataException("Update Albiqo Transfer to use this phone session.");
         return result;
     }
 
@@ -134,7 +136,27 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport
         return RequestAsync(id => new { id, op = "get", archiveId = archive.Id, offset, length }, offset, length, true, token);
     }
 
-    private async Task<byte[]> RequestAsync(Func<uint, object> command, long offset, int length, bool expectFile, CancellationToken token)
+    public async Task<MediaCatalogue> CatalogueAsync(CancellationToken token)
+    {
+        var result = TransferJson.Decode<MediaCatalogue>(await RequestAsync(id => new { id, op = "catalog" }, 0, 32768, false, token));
+        result.Validate(); return result;
+    }
+
+    public async Task<MediaFilePage> FilesAsync(string albumId, int cursor, CancellationToken token)
+    {
+        if (cursor < 0 || albumId.Length != 32 || albumId.Any(c => !char.IsAsciiHexDigit(c))) throw new ArgumentException("Invalid album page.");
+        var result = TransferJson.Decode<MediaFilePage>(await RequestAsync(id => new { id, op = "files", albumId, cursor }, 0, 32768, false, token));
+        result.Validate(albumId, cursor); return result;
+    }
+
+    public async Task<MediaChunk> ChunkAsync(MediaFile file, long offset, int length, CancellationToken token)
+    {
+        if (offset < 0 || length is < 1 or > 16384) throw new ArgumentOutOfRangeException(nameof(offset));
+        var result = TransferJson.Decode<MediaChunk>(await RequestAsync(id => new { id, op = "chunk", fileId = file.Id, offset, length }, 0, 32768, false, token, 600));
+        result.Validate(offset, length); return result;
+    }
+
+    private async Task<byte[]> RequestAsync(Func<uint, object> command, long offset, int length, bool expectFile, CancellationToken token, int minimumTimeoutSeconds = 30)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         await commandGate.WaitAsync(token);
@@ -152,7 +174,7 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport
             }
             // The smallest ATT MTU leaves only6 data bytes per notification; allow real slow-radio sessions.
             var payload = Math.Max(6, session.MaxPduSize - 3 - BleProtocol.ResponseHeaderSize);
-            var seconds = Math.Clamp(length / (double)payload * 0.15, 30, 600);
+            var seconds = Math.Clamp(length / (double)payload * 0.15, minimumTimeoutSeconds, 600);
             var result = await response.Completion.Task.WaitAsync(TimeSpan.FromSeconds(seconds), token);
             if (result.Kind == 3)
             {

@@ -1,6 +1,6 @@
 # Albiqo Transfer
 
-Albiqo'da hazırladığın albümleri kendi Windows uygulamamızla bilgisayarına kaydet. USB kablo veya Bluetooth seç; albüm adıyla hazırlanan ZIP'i istediğin klasöre al. ZIP açıldığında albümle aynı adlı klasör bulunur.
+Albiqo'da seçtiğin albümün fotoğraf ve videolarını kendi Windows uygulamamızla doğrudan bilgisayarına kaydet. USB kablo veya Bluetooth seç; dosyalar albümle aynı adlı klasöre gelir. Telefonda ZIP hazırlama veya Albiqo'ya ait ikinci bir medya kopyası oluşturma adımı yoktur.
 
 ## USB için önce bunu kur
 
@@ -12,19 +12,23 @@ Kurulumdan sonra veri kablosunu yeniden tak, iPhone'un kilidini aç ve Apple Dev
 
 ## Ön sürüm durumu
 
-Bu kaynak ve Windows EXE derlemesi **geliştirme ön sürümüdür**. Protokol, USB servis tüneli benzetimi, kesilen indirmeye devam etme ve SHA-256 kontrolleri otomatik test edilir. Fiziksel iPhone + Windows üzerinde USB/Bluetooth uçtan uca testleri ve Windows arayüzünün gerçek cihaz/dpi kontrolleri henüz tamamlanmadı. Bu yüzden donanımda doğrulanmış kararlı sürüm olarak sunulmaz. Mevcut App Store build11 bu yeni aktarım sunucusunu içermez; eşleşen Albiqo iOS güncellemesi gerekir.
+Bu kaynak ve Windows EXE derlemesi **geliştirme ön sürümüdür**. Protokol, USB servis tüneli benzetimi, orijinal medya akışı, kesilen indirmeye devam etme, SHA-256 ve güvenli dosya yolları otomatik test edilir. Fiziksel iPhone + Windows üzerinde USB/Bluetooth uçtan uca testleri ve Windows arayüzünün gerçek cihaz/dpi kontrolleri henüz tamamlanmadı. Bu yüzden donanımda doğrulanmış kararlı sürüm olarak sunulmaz. Doğrudan aktarım için Albiqo iOS **1.0.3 (build 13) veya sonraki eşleşen sürüm** gerekir. Önceki App Store sürümleri bu protokol2 sunucusunu içermez; bilgisayar uygulamasının tek başına güncellenmesi yeterli değildir.
 
 GitHub Windows runner'ı `--smoke-test` ile Türkçe/İngilizce arayüzün normal ve minimum pencere boyutlarını çalıştırıp PNG ve JSON kanıtı üretir. Bu testin workflow'da bulunması geçtiği anlamına gelmez; çalıştırma sonucu ayrıca kontrol edilmelidir. [Fiziksel test listesi](MANUAL-TEST-CHECKLIST.md).
 
 ## Kullanım
 
-1. USB kullanacaksan önce yukarıdaki Apple Devices kurulumunu tamamla. iPhone'da Albiqo ile albümü aktarım için hazırla ve **PC Aktarımı** ekranını aç.
+1. USB kullanacaksan önce yukarıdaki Apple Devices kurulumunu tamamla. iPhone'da Albiqo içinde aktarılacak albümü seçip **PC Aktarımı** ekranını aç.
 2. Windows'ta Albiqo Transfer'i açıp **USB** veya **Bluetooth** seç.
 3. **Telefonları bul** düğmesine bas. Telefonunu seçip iPhone'daki altı haneli geçici kodu gir.
-4. **Bağlan** ile hazır albümleri gör. Kaydedilecek klasörü ve albümü/albümleri seç.
-5. **Seçileni PC'ye kaydet** düğmesine bas. Dosya doğrulanınca ZIP hazır olur; mevcut dosyalar ezilmez.
+4. **Bağlan** ile telefonda paylaşmayı seçtiğin albümü gör. Kaydedilecek PC klasörünü ve albümü seç.
+5. **Seçileni PC'ye kaydet** düğmesine bas. Her fotoğraf/video dosyası akış sırasında alınır, boyut ve SHA-256 doğrulamasından sonra albüm klasöründe görünür; mevcut dosyalar ezilmez.
 
-Aktarım durdurulursa eksik dosya saklanır. Aynı albüm ve aynı klasörle yeniden bağlandığında doğrulanan metadata ile kaldığı byte'tan devam eder. Orijinaller telefondan otomatik silinmez. ZIP arşivini açmak kullanıcıya bırakılır.
+Aktarım durdurulursa eksik dosya PC'de saklanır. Aynı albüm ve aynı klasörle yeniden bağlandığında aynı kaynak kimliği ve sürümü için kaldığı byte'tan devam eder. Daha önce tamamlanan dosyalar yeniden hash ile doğrulanıp atlanır; gereksiz ikinci kopya oluşturulmaz. Kullanıcı PC'deki dosyayı değiştirmişse o dosya korunur, yeni aktarım benzersiz adla kaydedilir. Orijinaller telefondan otomatik silinmez.
+
+Albüm klasörü kaynak adını korur; Windows'un izin vermediği karakterler güvenli hale getirilir. HEIC, JPEG, MOV ve Live Photo'nun eşlik eden kaynakları gibi dosyalar kendi uzantılarıyla saklanır. Aynı adlı kaynaklar `(2)`, `(3)` gibi eklerle korunur. Devam etme ve tamamlanma kayıtları PC'deki albüm klasörünün gizli `.albiqo-transfer` alt klasöründedir.
+
+Toplam byte boyutu başlamadan bilinemeyebilir. Arayüz tamamlanan dosya sayısını ve gerçekten alınan byte miktarını gösterir. iCloud'daki kaynaklar Photos tarafından istendiği sırada indirilir; Apple'ın sistem önbelleği ve indirme işlemi telefonda boş alan gerektirebilir. Albiqo tam albüm ZIP'i veya ayrı medya staging dosyası üretmez.
 
 ### USB
 
@@ -40,8 +44,12 @@ Aktarım durdurulursa eksik dosya saklanır. Aynı albüm ve aynı klasörle yen
 - Windows Bluetooth Low Energy destekli radyo/sürücü ve telefonun Bluetooth izni gerekir.
 - Windows'un normal eşleştirme onayını tamamla. Geçici Albiqo kodu ayrıca istenir.
 - Bu, klasik sistem “Bluetooth ile dosya gönder” değil; iki Albiqo uygulaması arasında **şifreli özel BLE GATT protokolüdür**.
-- Büyük albümler ve videolar Bluetooth'ta uzun sürebilir. USB büyük arşivler için daha uygundur.
+- Büyük albümler ve videolar Bluetooth'ta uzun sürebilir. USB büyük albümler için daha uygundur.
 - iPhone aktarım ekranı açık kalmalı. Uygulama arka plana geçerse oturum güvenlik için durur.
+
+## Eski telefon sürümleriyle uyumluluk
+
+Uygulama protokol1 kullanan eski bir Albiqo oturumuna bağlanırsa önceden hazırlanmış ZIP paketlerini alma akışını korur ve bunu arayüzde eski sürüm uyumluluğu olarak belirtir. ZIP'i otomatik açmaz. Yeni **doğrudan aktarım** oturumunda ZIP kullanılmaz; bu iki mod aynı anda çalışmaz.
 
 ## Gereksinimler
 
@@ -62,7 +70,7 @@ Paket, dağıtılan .NET bileşenlerinin lisans ve üçüncü taraf bildirimleri
 
 ## Teknik sözleşme ve kaynaklar
 
-- [Protokol1](PROTOCOL.md): UUID'ler, sınırlı byte aralıkları, metadata, kimlik doğrulama, resume ve hash doğrulaması.
+- [Protokol2 ve eski sürüm uyumluluğu](PROTOCOL.md): UUID'ler, doğrudan medya sayfaları/parçaları, kimlik doğrulama, devam etme ve hash doğrulaması.
 - [Microsoft BLE GATT istemci API'leri](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/gatt-client).
 - [Microsoft Windows BluetoothLEDevice](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.bluetoothledevice).
 - [Apple CoreBluetooth peripheral](https://developer.apple.com/documentation/corebluetooth/cbperipheralmanager).

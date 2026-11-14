@@ -1,3 +1,51 @@
+# Albiqo Transfer protocol 2 — direct media
+
+Frozen: 14 November 2026. Albiqo iOS 1.0.3 (13) and Windows Transfer 0.2.0-preview introduce protocol2; protocol1 remains available only for older prepared-archive sessions.
+
+The iPhone exposes only the album explicitly selected for foreground PC Transfer. The temporary six-digit PIN is held in memory. Authentication, Apple USB trust/driver prerequisites, encrypted BLE pairing, service UUIDs, RX5/TX14 framing and request serialization are unchanged from protocol1 below. There are no filesystem-path, remote-write or phone-media deletion operations. Session closure clears access. Old Windows clients must update when the phone advertises protocolVersion2.
+
+## Session, catalogue and files
+
+All HTTP requests use `Authorization: Bearer <PIN>`, never a URL secret. JSON is UTF-8/camelCase. Nullable Swift fields may be omitted; Windows accepts omitted optional fields as null.
+
+- `GET /v1/session`, or BLE `{id,op:"auth",pin}` → `{protocolVersion:2,deviceName,sessionId,expiresAt}`.
+- `GET /v2/catalogue`, or BLE `{id,op:"catalog"}` → `{protocolVersion:2,albums:[{id,name,assetCount,fileCount}]}`.
+- `GET /v2/albums/{albumId}/files/{cursor}`, or BLE `{id,op:"files",albumId,cursor}` → `{protocolVersion:2,albumId,files:[{id,albumId,fileName,version,createdAt}],nextCursor:int|null}`.
+
+IDs are 32 lowercase hex characters. `version` is a stable 32- or 64-hex source fingerprint, **not a precomputed file-content digest**. `createdAt` is ISO8601. Listing metadata does not require reading all originals. Cursor starts at0, each page contains at most32 resources and the optional next cursor increases. A Live Photo or edited asset may have more than one original resource, so fileCount may exceed assetCount. The PC validates metadata and duplicate IDs before saving. Filenames may duplicate; each resource is retained.
+
+## Bounded source chunks
+
+`GET /v2/files/{fileId}/chunk/{offset}/{length}`, or BLE `{id,op:"chunk",fileId,offset,length}` returns:
+
+```json
+{"offset":0,"data":"base64 bytes","eof":false}
+```
+
+Final successful response:
+
+```json
+{"offset":262144,"data":"base64 bytes, possibly empty","eof":true,"totalSize":300000,"sha256":"64 lowercase hexadecimal characters"}
+```
+
+`offset` is the requested absolute file byte offset. USB length is1…262144 bytes with a512KiB JSON cap. BLE length is1…16384 bytes with a32KiB JSON cap; Windows selects512…16384 from the negotiated MTU. V2 replies are TX kind1 JSON with framing offsets into the JSON starting at0; the JSON object's offset remains the absolute media offset. V1 get replies remain kind2 binary. RX commands stay at most512 bytes. HTTP paths have no query strings.
+
+Nonfinal responses must contain bytes. EOF may contain a short or empty final block but only follows successful source completion and must include the actual full size and full source SHA-256. Missing EOF proof, wrong offset, premature EOF, excessive bytes or a mismatched hash never publishes a complete PC file. A request may wait for iCloud source preparation: USB v2 chunks and BLE v2 chunk replies have a600-second bound; caller cancellation interrupts the wait. Control requests retain shorter bounds. The server has a600-second reply limit and120-second no-progress limit, with Photos progress extending source activity as applicable.
+
+The iPhone reads one original resource sequentially through a bounded producer/consumer buffer, retains the last chunk for idempotent retry and does not start a new original read for each block. On genuine resume it reopens once, discards and hashes the prefix, and includes that prefix in the final digest. No whole source prehash, whole-album ZIP or Albiqo media staging file is required. Photos/iCloud's own downloads and cache may still consume system storage.
+
+## PC save and reconnect semantics
+
+The selected destination receives an album-named folder (Windows-invalid characters are sanitized). Existing unrelated folders are not adopted. Matching generated album metadata reconnects to the same folder. Original filename extensions and all listed resource components are retained; conflicting names receive unique suffixes. Existing files are never overwritten. Destination directories, resource paths and metadata paths reject symlinks/reparse points.
+
+PC-only state lives in `.albiqo-transfer` inside the album folder: an album marker, per-resource `.pending.json`, unique `.partial`, completed `.complete.json` receipts and a transfer lock. Checkpoint identity includes source file ID, album ID, resource version and original filename. Resume re-hashes retained PC bytes before appending, then compares the complete local size/SHA against the phone's successful EOF proof. Only then is the file moved to a unique final name. A checkpoint closes the crash window between publishing and receipt creation.
+
+On cancellation or connection failure, the partial stays resumable. On malformed EOF/hash failure, its generated pending sidecar is invalidated and Retry creates a fresh partial; suspect bytes remain unpublished. Completed receipts avoid duplicates only after revalidating the actual saved file's size/SHA. A missing or user-modified completed file is downloaded to a new unique name; a user-modified file is preserved. Changed source versions do not reuse old partials or completed receipts. Progress reports file counts and actual transferred bytes; a total byte size is optional and is not invented before it is known.
+
+---
+
+## Legacy compatibility reference
+
 # Albiqo Transfer protocol 1
 
 Frozen: 14 November 2026. Both peers use explicit foreground transfer sessions.

@@ -19,7 +19,7 @@ public sealed class MainWindow : Form
     private readonly TextBox folder = new() { ReadOnly = true, Dock = DockStyle.Fill };
     private readonly Button chooseFolder = new() { Text = "…", Width = 44, Height = 32 };
     private readonly DataGridView albums = new() { Dock = DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true, MultiSelect = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false, BorderStyle = BorderStyle.None };
-    private readonly Label status = new() { AutoSize = false, Dock = DockStyle.Fill, Height = 48 };
+    private readonly Label status = new() { AutoSize = false, Dock = DockStyle.Fill, Height = 48, AutoEllipsis = true };
     private readonly Label hint = new() { AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
     private readonly ProgressBar progress = new() { Dock = DockStyle.Fill, Maximum = 1000, Height = 12 };
     private readonly Label progressText = new() { AutoSize = true };
@@ -28,6 +28,7 @@ public sealed class MainWindow : Form
     private readonly Button openFolder = new() { AutoSize = true };
     private CancellationTokenSource? operation;
     private IArchiveTransport? transport;
+    private int protocolVersion = 1;
     private bool closing;
     private bool closeReady;
 
@@ -116,7 +117,7 @@ public sealed class MainWindow : Form
         openFolder.Click += async (_, _) => await RunAsync(_ => { Directory.CreateDirectory(folder.Text); Process.Start(new ProcessStartInfo("explorer.exe", folder.Text) { UseShellExecute = true }); return Task.CompletedTask; });
         FormClosing += OnFormClosing;
         UpdateHint();
-        status.Text = T("Telefonda albümü hazırlayıp PC Aktarımı ekranını açık tut.", "Prepare an album on your phone and keep PC Transfer open.");
+        status.Text = T("Telefonda aktarılacak albümü seçip PC Aktarımı ekranını açık tut.", "Choose an album on your phone and keep PC Transfer open.");
     }
 
     private static void ApplyButtonStyle(Control parent)
@@ -184,16 +185,31 @@ public sealed class MainWindow : Form
         try
         {
             var session = await candidate.AuthenticateAsync(code.Text, token);
-            var catalogue = await candidate.ListAsync(token);
-            transport = candidate;
             albums.Rows.Clear();
-            foreach (var archive in catalogue.Archives)
+            protocolVersion = session.ProtocolVersion;
+            ConfigureColumns(protocolVersion == 2);
+            if (protocolVersion == 2 && candidate is IMediaTransport media)
             {
-                var index = albums.Rows.Add(archive.AlbumName, SizeText(archive.Size), archive.CreatedAt.LocalDateTime.ToString("g"));
-                albums.Rows[index].Tag = archive;
+                var catalogue = await media.CatalogueAsync(token);
+                foreach (var album in catalogue.Albums)
+                {
+                    var index = albums.Rows.Add(album.Name, album.AssetCount.ToString("N0"), album.FileCount.ToString("N0"));
+                    albums.Rows[index].Tag = album;
+                }
+                status.Text = T($"{session.DeviceName} bağlandı · doğrudan aktarım · {catalogue.Albums.Length} albüm", $"Connected to {session.DeviceName} · direct transfer · {catalogue.Albums.Length} albums");
             }
+            else
+            {
+                var catalogue = await candidate.ListAsync(token);
+                foreach (var archive in catalogue.Archives)
+                {
+                    var index = albums.Rows.Add(archive.AlbumName, SizeText(archive.Size), archive.CreatedAt.LocalDateTime.ToString("g"));
+                    albums.Rows[index].Tag = archive;
+                }
+                status.Text = T($"{session.DeviceName} bağlandı · eski sürüm uyumluluğu · {catalogue.Archives.Length} paket", $"Connected to {session.DeviceName} · legacy compatibility · {catalogue.Archives.Length} packages");
+            }
+            transport = candidate;
             code.Clear();
-            status.Text = T($"{session.DeviceName} bağlandı · {catalogue.Archives.Length} albüm hazır", $"Connected to {session.DeviceName} · {catalogue.Archives.Length} albums ready");
         }
         catch { await candidate.DisposeAsync(); throw; }
     }
@@ -201,6 +217,7 @@ public sealed class MainWindow : Form
     private async Task SaveAsync(CancellationToken token)
     {
         if (transport is null) return;
+        if (protocolVersion == 2 && transport is IMediaTransport media) { await SaveMediaAsync(media, token); return; }
         var selected = albums.SelectedRows.Cast<DataGridViewRow>().OrderBy(r => r.Index).Select(r => r.Tag).OfType<ArchiveInfo>().ToArray();
         if (selected.Length == 0) return;
         var reporter = new Progress<TransferProgress>(p =>
@@ -219,9 +236,50 @@ public sealed class MainWindow : Form
         progressText.Text = T("Tamamlandı", "Complete");
     }
 
+    private void ConfigureColumns(bool direct)
+    {
+        albums.Columns[1].HeaderText = direct ? T("Öğe", "Items") : T("Boyut", "Size");
+        albums.Columns[2].HeaderText = direct ? T("Dosya", "Files") : T("Hazırlanma", "Prepared");
+    }
+
+    // Deterministic presentation fixture for the Windows runner; never discovers or connects a phone.
+    internal void ShowDirectTransferSmokeState()
+    {
+        ConfigureColumns(true); albums.Rows.Clear();
+        albums.Rows.Add(T("İstanbul Tatili", "Istanbul Holiday"), "24", "27");
+        status.Text = T("Kaydediliyor: IMG_2021.HEIC · 256 KB", "Saving: IMG_2021.HEIC · 256 KB");
+        progress.Value = 370;
+        progressText.Text = T("10/27 dosya · 25,6 MB", "10/27 files · 25.6 MB");
+    }
+
+    private async Task SaveMediaAsync(IMediaTransport media, CancellationToken token)
+    {
+        var selected = albums.SelectedRows.Cast<DataGridViewRow>().OrderBy(row => row.Index).Select(row => row.Tag).OfType<MediaAlbum>().ToArray();
+        if (selected.Length == 0) return;
+        var downloader = new PCMediaDownloader();
+        var reporter = new Progress<MediaTransferProgress>(p =>
+        {
+            if (IsDisposed || closing) return;
+            progress.Value = p.TotalFiles == 0 ? 0 : (int)Math.Clamp(p.CompletedFiles * 1000.0 / p.TotalFiles, 0, 1000);
+            progressText.Text = T($"{p.CompletedFiles}/{p.TotalFiles} dosya · {SizeText(p.BytesTransferred)}", $"{p.CompletedFiles}/{p.TotalFiles} files · {SizeText(p.BytesTransferred)}");
+            status.Text = p.Stage == "checking"
+                ? T($"Kontrol ediliyor: {p.FileName}", $"Checking: {p.FileName}")
+                : p.Stage is "complete" ? T("Dosyalar doğrulandı.", "Files verified.")
+                : T($"Kaydediliyor: {p.FileName} · {SizeText(p.CurrentFileBytes)}", $"Saving: {p.FileName} · {SizeText(p.CurrentFileBytes)}");
+        });
+        var saved = 0; var skipped = 0;
+        foreach (var album in selected)
+        {
+            var result = await downloader.DownloadAlbumAsync(media, album, folder.Text, reporter, token);
+            saved += result.SavedFiles; skipped += result.SkippedFiles;
+        }
+        status.Text = T($"{saved} dosya kaydedildi · {skipped} dosya zaten tamamlanmış. Telefonda hiçbir öğe silinmedi.", $"Saved {saved} files · {skipped} already complete. Nothing was deleted from your phone.");
+        progress.Value = 1000; progressText.Text = T("Tamamlandı", "Complete");
+    }
+
     private async Task DisconnectAsync()
     {
-        var previous = transport; transport = null;
+        var previous = transport; transport = null; protocolVersion = 1; ConfigureColumns(false);
         if (previous is not null) await previous.DisposeAsync();
         albums.Rows.Clear(); RefreshEnabled();
     }

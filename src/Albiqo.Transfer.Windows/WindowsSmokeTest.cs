@@ -45,6 +45,16 @@ internal static class WindowsSmokeTest
                         bitmap.Save(Path.Combine(outputDirectory, name), System.Drawing.Imaging.ImageFormat.Png);
                     }
                     results.Add(new { language, minimum, width = form.Width, height = form.Height, clientWidth = form.ClientSize.Width, clientHeight = form.ClientSize.Height, dpi = form.DeviceDpi, errors, controls = DescribeControls(form), screenshot = name });
+                    form.ShowDirectTransferSmokeState();
+                    form.PerformLayout(); Application.DoEvents();
+                    CheckBounds(form, errors);
+                    var directName = $"Albiqo-Transfer-direct-{language}-{(minimum ? "minimum" : "default")}.png";
+                    using (var bitmap = new Bitmap(form.Width, form.Height))
+                    {
+                        form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
+                        bitmap.Save(Path.Combine(outputDirectory, directName), System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    results.Add(new { language, minimum, direct = true, errors, controls = DescribeControls(form), screenshot = directName });
                     form.Hide();
                     failures.AddRange(errors.Select(error => $"{language}/{(minimum ? "minimum" : "default")}: {error}"));
                 }
