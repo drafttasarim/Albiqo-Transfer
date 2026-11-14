@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Runtime.InteropServices;
 
 namespace Albiqo.Transfer.Windows;
 
@@ -7,10 +8,11 @@ internal static class WindowsSmokeTest
 {
     public static int Run(string outputDirectory)
     {
-        Directory.CreateDirectory(outputDirectory);
         var results = new List<object>();
+        var failures = new List<string>();
         try
         {
+            Directory.CreateDirectory(outputDirectory);
             foreach (var language in new[] { "tr-TR", "en-US" })
             {
                 CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(language);
@@ -31,20 +33,46 @@ internal static class WindowsSmokeTest
                         form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
                         bitmap.Save(Path.Combine(outputDirectory, name), System.Drawing.Imaging.ImageFormat.Png);
                     }
-                    results.Add(new { language, minimum, width = form.Width, height = form.Height, errors, screenshot = name });
+                    results.Add(new { language, minimum, width = form.Width, height = form.Height, clientWidth = form.ClientSize.Width, clientHeight = form.ClientSize.Height, dpi = form.DeviceDpi, errors, controls = DescribeControls(form), screenshot = name });
                     form.Hide();
-                    if (errors.Count > 0) throw new InvalidOperationException(string.Join("; ", errors));
+                    failures.AddRange(errors.Select(error => $"{language}/{(minimum ? "minimum" : "default")}: {error}"));
                 }
             }
-            File.WriteAllText(Path.Combine(outputDirectory, "Windows-UI-Smoke.json"), JsonSerializer.Serialize(new { status = "passed", cases = results }, new JsonSerializerOptions { WriteIndented = true }));
+            if (failures.Count > 0) throw new InvalidOperationException(string.Join(Environment.NewLine, failures));
+            WriteReport(outputDirectory, "passed", null, results);
             return 0;
         }
         catch (Exception error)
         {
-            File.WriteAllText(Path.Combine(outputDirectory, "Windows-UI-Smoke.json"), JsonSerializer.Serialize(new { status = "failed", error = error.ToString(), cases = results }, new JsonSerializerOptions { WriteIndented = true }));
+            Console.Error.WriteLine(error.ToString());
+            WriteReport(outputDirectory, "failed", error.ToString(), results);
             return 1;
         }
     }
+
+    internal static int RecordStartupFailure(string outputDirectory, Exception error)
+    {
+        Console.Error.WriteLine(error.ToString());
+        try { WriteReport(outputDirectory, "startup_failed", error.ToString(), []); }
+        catch (Exception reportError) { Console.Error.WriteLine(reportError.ToString()); }
+        return 1;
+    }
+
+    private static void WriteReport(string outputDirectory, string status, string? error, List<object> results)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var report = new { status, error, runtime = RuntimeInformation.FrameworkDescription, os = RuntimeInformation.OSDescription, userInteractive = Environment.UserInteractive, cases = results };
+        File.WriteAllText(Path.Combine(outputDirectory, "Windows-UI-Smoke.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+        if (error is not null) File.WriteAllText(Path.Combine(outputDirectory, "smoke-failure.txt"), error);
+    }
+
+    private static object[] DescribeControls(Control parent) => parent.Controls.Cast<Control>().Select(child => (object)new
+    {
+        type = child.GetType().Name, text = child.Text, visible = child.Visible, enabled = child.Enabled,
+        bounds = new { child.Left, child.Top, child.Width, child.Height },
+        client = new { child.ClientSize.Width, child.ClientSize.Height },
+        children = DescribeControls(child)
+    }).ToArray();
 
     private static void CheckBounds(Control parent, List<string> errors)
     {

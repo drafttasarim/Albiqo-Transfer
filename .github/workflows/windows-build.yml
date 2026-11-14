@@ -15,8 +15,8 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
       - name: Protocol, tunnel and verified resume checks
@@ -28,8 +28,21 @@ jobs:
       - name: Windows runtime and layout smoke check
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath (Resolve-Path artifacts/win-x64/AlbiqoTransfer.exe) -ArgumentList '--smoke-test', 'artifacts/ui-proof' -Wait -PassThru
+          New-Item -ItemType Directory -Force artifacts/ui-proof | Out-Null
+          $process = Start-Process -FilePath (Resolve-Path artifacts/win-x64/AlbiqoTransfer.exe) -ArgumentList '--smoke-test', 'artifacts/ui-proof' -WorkingDirectory $PWD.Path -RedirectStandardOutput artifacts/ui-proof/smoke-stdout.txt -RedirectStandardError artifacts/ui-proof/smoke-stderr.txt -Wait -PassThru
+          foreach ($file in @('smoke-failure.txt', 'Windows-UI-Smoke.json', 'smoke-stderr.txt', 'smoke-stdout.txt')) {
+            $path = Join-Path artifacts/ui-proof $file
+            if (Test-Path $path) { Write-Output "--- $file ---"; Get-Content -Raw $path | Write-Output }
+          }
           if ($process.ExitCode -ne 0) { throw "Windows UI smoke check failed: $($process.ExitCode)" }
+      - name: Preserve Windows UI proof even on failure
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: Albiqo-Transfer-Windows-UI-Proof
+          path: artifacts/ui-proof/*
+          if-no-files-found: warn
+          retention-days: 30
       - name: Create portable ZIPs and checksums
         shell: pwsh
         run: |
@@ -41,12 +54,11 @@ jobs:
             Compress-Archive -Path "artifacts/$arch/AlbiqoTransfer.exe", "artifacts/$arch/README.md", "artifacts/$arch/PRIVACY.md", "artifacts/$arch/third-party" -DestinationPath "artifacts/packages/Albiqo-Transfer-0.1.0-preview-$arch.zip"
           }
           Get-ChildItem artifacts/packages/*.zip | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } | Set-Content artifacts/packages/SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: Albiqo-Transfer-0.1.0-preview-Windows
           path: |
             artifacts/packages/*
-            artifacts/ui-proof/*
           if-no-files-found: error
           retention-days: 30
 

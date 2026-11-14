@@ -5,9 +5,17 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        ApplicationConfiguration.Initialize();
         if (args.Length > 0 && args[0] == "--smoke-test")
-            return WindowsSmokeTest.Run(args.Length > 1 ? args[1] : "ui-proof");
+        {
+            var output = args.Length > 1 ? args[1] : "ui-proof";
+            try
+            {
+                ApplicationConfiguration.Initialize();
+                return WindowsSmokeTest.Run(output);
+            }
+            catch (Exception error) { return WindowsSmokeTest.RecordStartupFailure(output, error); }
+        }
+        ApplicationConfiguration.Initialize();
         Application.Run(new MainWindow());
         return 0;
     }
