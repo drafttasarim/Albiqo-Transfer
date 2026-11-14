@@ -16,7 +16,7 @@ public sealed class MainWindow : Form
     private readonly Button connect = new() { AutoSize = true };
     private readonly Button disconnect = new() { AutoSize = true, Enabled = false };
     private readonly TextBox folder = new() { ReadOnly = true, Dock = DockStyle.Fill };
-    private readonly Button chooseFolder = new() { Text = "…", Width = 44 };
+    private readonly Button chooseFolder = new() { Text = "…", Width = 44, Height = 32 };
     private readonly DataGridView albums = new() { Dock = DockStyle.Fill, AllowUserToAddRows = false, AllowUserToDeleteRows = false, ReadOnly = true, MultiSelect = true, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false, BorderStyle = BorderStyle.None };
     private readonly Label status = new() { AutoSize = false, Dock = DockStyle.Fill, Height = 48 };
     private readonly Label hint = new() { AutoSize = true, MaximumSize = new Size(900, 0) };
@@ -50,7 +50,7 @@ public sealed class MainWindow : Form
         layout.RowStyles.Add(new(SizeType.Absolute, 78));
         layout.RowStyles.Add(new(SizeType.Absolute, 50));
         layout.RowStyles.Add(new(SizeType.Absolute, 56));
-        layout.RowStyles.Add(new(SizeType.Absolute, 76));
+        layout.RowStyles.Add(new(SizeType.Absolute, 96));
         layout.RowStyles.Add(new(SizeType.Absolute, 48));
         layout.RowStyles.Add(new(SizeType.Percent, 100));
         layout.RowStyles.Add(new(SizeType.Absolute, 42));
@@ -65,7 +65,9 @@ public sealed class MainWindow : Form
         layout.Controls.Add(transportRow, 0, 1);
         layout.Controls.Add(hint, 0, 2);
         var pairing = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
-        pairing.RowStyles.Add(new(SizeType.Absolute, 38)); pairing.RowStyles.Add(new(SizeType.Absolute, 38));
+        // Native auto-sized buttons are37px at the supported96dpi/font baseline.
+        // Reserve their full height plus container margins instead of clipping their lower edge.
+        pairing.RowStyles.Add(new(SizeType.Absolute, 48)); pairing.RowStyles.Add(new(SizeType.Absolute, 48));
         var findRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         findRow.Controls.AddRange([scan, devices]);
         var codeRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
