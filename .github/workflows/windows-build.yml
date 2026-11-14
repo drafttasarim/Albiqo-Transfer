@@ -51,12 +51,12 @@ jobs:
             Copy-Item README.md "artifacts/$arch/README.md"
             Copy-Item PRIVACY.md "artifacts/$arch/PRIVACY.md"
             Copy-Item third-party "artifacts/$arch/third-party" -Recurse
-            Compress-Archive -Path "artifacts/$arch/AlbiqoTransfer.exe", "artifacts/$arch/README.md", "artifacts/$arch/PRIVACY.md", "artifacts/$arch/third-party" -DestinationPath "artifacts/packages/Albiqo-Transfer-0.1.0-preview-$arch.zip"
+            Compress-Archive -Path "artifacts/$arch/AlbiqoTransfer.exe", "artifacts/$arch/README.md", "artifacts/$arch/PRIVACY.md", "artifacts/$arch/third-party" -DestinationPath "artifacts/packages/Albiqo-Transfer-0.1.1-preview-$arch.zip"
           }
           Get-ChildItem artifacts/packages/*.zip | Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } | Set-Content artifacts/packages/SHA256SUMS.txt
       - uses: actions/upload-artifact@v6
         with:
-          name: Albiqo-Transfer-0.1.0-preview-Windows
+          name: Albiqo-Transfer-0.1.1-preview-Windows
           path: |
             artifacts/packages/*
           if-no-files-found: error

@@ -16,7 +16,7 @@ Authentication response: `{"protocolVersion":1,"deviceName":"iPhone","sessionId"
 
 ## USB
 
-The PC talks to the installed Apple usbmux service at `127.0.0.1:27015`. It uses the public plist usbmux protocol: 16-byte little-endian header (length, version=1, message=8, tag), `ListDevices`, then `Connect` with DeviceID and network-byte-order PortNumber **52783**. Only devices with ConnectionType `USB` are offered. After successful Connect the socket is an HTTP tunnel to a loopback-only TCP listener inside Albiqo.
+The PC talks to the installed Apple usbmux service at `127.0.0.1:27015`. It first tries the plist usbmux protocol: 16-byte little-endian header (length, version=1, message=8, tag), `ListDevices`, then `Connect` with DeviceID and network-byte-order PortNumber **52783**. Older services that reject `ListDevices` are enumerated through `Listen` and Attached/Detached events. A BADVERSION result negotiates the legacy native v0 `Listen`/`Connect` protocol; Connect negotiates independently. Device IDs may be in `Properties` or the outer record. Only explicit plist ConnectionType `USB` or implicit native-v0 USB records are offered; network devices are excluded. Command replies, partial packets and connection setup have bounded waits. After successful Connect the socket is an HTTP tunnel to a loopback-only TCP listener inside Albiqo. This host-service compatibility does not change the Albiqo application protocol version.
 
 All HTTP requests include `Authorization: Bearer <PIN>`. No secrets in URLs. Routes:
 

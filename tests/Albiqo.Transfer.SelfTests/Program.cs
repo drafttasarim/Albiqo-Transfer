@@ -76,6 +76,168 @@ var tests = new (string Name, Func<Task> Body)[]
         await using var unauthorized = new UsbArchiveTransport(devices[0], mux);
         await ThrowsAsync<IOException>(() => unauthorized.AuthenticateAsync("999999", default));
     }),
+    ("USB enumeration accepts DeviceID inside Properties and filters network devices", async () =>
+    {
+        await using var server = new ScriptedMuxService(async (stream, _, token) =>
+        {
+            var request = await ScriptedMuxService.ReadAsync(stream, token);
+            ScriptedMuxService.ExpectPlist(request, "ListDevices");
+            await ScriptedMuxService.SendXmlAsync(stream, request.Tag,
+                "<plist><dict><key>DeviceList</key><array><dict><key>Properties</key><dict><key>DeviceID</key><integer>91</integer><key>SerialNumber</key><string>props-only</string><key>ConnectionType</key><string>USB</string></dict></dict><dict><key>Properties</key><dict><key>DeviceID</key><integer>92</integer><key>ConnectionType</key><string>Network</string></dict></dict></array></dict></plist>", token);
+        });
+        var phones = await new UsbMuxClient(server.Port).ListAsync(default);
+        True(phones.Count == 1 && phones[0].DeviceId == 91 && phones[0].Serial == "props-only");
+    }),
+    ("USB older plist services discover through Listen and handle Detached events", async () =>
+    {
+        await using var server = new ScriptedMuxService(async (stream, connection, token) =>
+        {
+            var request = await ScriptedMuxService.ReadAsync(stream, token);
+            ScriptedMuxService.ExpectPlist(request, connection == 1 ? "ListDevices" : "Listen");
+            await ScriptedMuxService.SendResultAsync(stream, request.Tag, connection == 1 ? 1U : 0U, legacy: false, token);
+            if (connection == 1) return;
+            await ScriptedMuxService.SendXmlAsync(stream, 0, ScriptedMuxService.AttachedXml(31), token);
+            await ScriptedMuxService.SendXmlAsync(stream, 0, ScriptedMuxService.AttachedXml(32), token);
+            await ScriptedMuxService.SendXmlAsync(stream, 0,
+                "<plist><dict><key>MessageType</key><string>Detached</string><key>DeviceID</key><integer>31</integer></dict></plist>", token);
+            await Task.Delay(2000, token);
+        });
+        var phones = await new UsbMuxClient(server.Port).ListAsync(default);
+        True(phones.Count == 1 && phones[0].DeviceId == 32);
+        True(server.ConnectionCount == 2);
+    }),
+    ("USB legacy v0 services negotiate binary Listen and decode fixed device records", async () =>
+    {
+        await using var server = new ScriptedMuxService(async (stream, connection, token) =>
+        {
+            var request = await ScriptedMuxService.ReadAsync(stream, token);
+            if (connection == 1)
+            {
+                ScriptedMuxService.ExpectPlist(request, "ListDevices");
+                await ScriptedMuxService.SendResultAsync(stream, request.Tag, 6, legacy: true, token);
+                return;
+            }
+            if (request.Version != 0 || request.Type != 3 || request.Body.Length != 0) throw new Exception("Expected native v0 Listen.");
+            await ScriptedMuxService.SendResultAsync(stream, request.Tag, 0, legacy: true, token);
+            var record = new byte[268];
+            BinaryPrimitives.WriteUInt32LittleEndian(record, 47);
+            BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(4), 0x12A8);
+            Encoding.ASCII.GetBytes("legacy-phone").CopyTo(record, 6);
+            await ScriptedMuxService.SendAsync(stream, 0, 4, 0, record, token);
+            await Task.Delay(2000, token);
+        });
+        var phones = await new UsbMuxClient(server.Port).ListAsync(default);
+        True(phones.Count == 1 && phones[0].DeviceId == 47 && phones[0].Serial == "legacy-phone");
+    }),
+    ("USB Listen also negotiates when only the subscription rejects plist v1", async () =>
+    {
+        await using var server = new ScriptedMuxService(async (stream, connection, token) =>
+        {
+            var request = await ScriptedMuxService.ReadAsync(stream, token);
+            if (connection < 3)
+            {
+                ScriptedMuxService.ExpectPlist(request, connection == 1 ? "ListDevices" : "Listen");
+                await ScriptedMuxService.SendResultAsync(stream, request.Tag, connection == 1 ? 1U : 6U, legacy: connection == 2, token);
+            }
+            else
+            {
+                if (request.Version != 0 || request.Type != 3) throw new Exception("Expected binary Listen.");
+                await ScriptedMuxService.SendResultAsync(stream, request.Tag, 0, legacy: true, token);
+                await Task.Delay(2000, token);
+            }
+        });
+        var phones = await new UsbMuxClient(server.Port).ListAsync(default);
+        True(phones.Count == 0 && server.ConnectionCount == 3);
+    }),
+    ("USB Connect independently negotiates v0 and preserves tunnel bytes", async () =>
+    {
+        await using var server = new ScriptedMuxService(async (stream, connection, token) =>
+        {
+            var request = await ScriptedMuxService.ReadAsync(stream, token);
+            if (connection == 1)
+            {
+                ScriptedMuxService.ExpectPlist(request, "Connect");
+                await ScriptedMuxService.SendResultAsync(stream, request.Tag, 6, legacy: true, token);
+                return;
+            }
+            byte[] expected = [0x34, 0x12, 0, 0, 0xCE, 0x2F, 0, 0];
+            if (request.Version != 0 || request.Type != 2 || !request.Body.SequenceEqual(expected))
+                throw new Exception("Legacy Connect must contain LE device ID, BE phone port and zero reserved field.");
+            await ScriptedMuxService.SendResultAsync(stream, request.Tag, 0, legacy: true, token);
+            await stream.WriteAsync(new byte[] { 72, 84, 84, 80 }, token);
+        });
+        await using var tunnel = await new UsbMuxClient(server.Port).ConnectAsync(0x1234, default);
+        var bytes = new byte[4]; await tunnel.ReadExactlyAsync(bytes);
+        Equal("HTTP", Encoding.ASCII.GetString(bytes));
+    }),
+    ("USB silent or partial command replies time out with a distinct failure", async () =>
+    {
+        foreach (var partial in new[] { false, true })
+        {
+            await using var server = new ScriptedMuxService(async (stream, _, token) =>
+            {
+                await ScriptedMuxService.ReadAsync(stream, token);
+                if (partial) await stream.WriteAsync(new byte[] { 20, 0, 0 }, token);
+                await Task.Delay(2000, token);
+            });
+            try
+            {
+                await new UsbMuxClient(server.Port, TimeSpan.FromMilliseconds(80)).ListAsync(default);
+                throw new Exception("Expected a bounded response timeout.");
+            }
+            catch (UsbMuxException ex) { True(ex.Failure == UsbMuxFailure.ResponseTimeout); }
+        }
+    }),
+    ("USB caller cancellation stays cancellation rather than driver or timeout failure", async () =>
+    {
+        await using var server = new ScriptedMuxService(async (stream, _, token) =>
+        {
+            await ScriptedMuxService.ReadAsync(stream, token);
+            await Task.Delay(2000, token);
+        });
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(80));
+        await ThrowsAsync<OperationCanceledException>(() => new UsbMuxClient(server.Port).ListAsync(cancel.Token));
+    }),
+    ("USB malformed packet tags and lengths are rejected without protocol fallback", async () =>
+    {
+        foreach (var badLength in new[] { false, true })
+        {
+            await using var server = new ScriptedMuxService(async (stream, _, token) =>
+            {
+                var request = await ScriptedMuxService.ReadAsync(stream, token);
+                if (badLength)
+                {
+                    var header = new byte[16]; BinaryPrimitives.WriteUInt32LittleEndian(header, 15);
+                    await stream.WriteAsync(header, token);
+                }
+                else await ScriptedMuxService.SendResultAsync(stream, request.Tag + 1, 6, legacy: true, token);
+            });
+            await ThrowsAsync<InvalidDataException>(() => new UsbMuxClient(server.Port).ListAsync(default));
+            True(server.ConnectionCount == 1);
+        }
+    }),
+    ("USB missing local service reports a driver/service failure distinctly", async () =>
+    {
+        var reservation = new TcpListener(IPAddress.Loopback, 0); reservation.Start();
+        var closedPort = ((IPEndPoint)reservation.LocalEndpoint).Port; reservation.Stop();
+        try
+        {
+            await new UsbMuxClient(closedPort).ListAsync(default);
+            throw new Exception("Expected missing Apple service.");
+        }
+        catch (UsbMuxException ex) { True(ex.Failure == UsbMuxFailure.ServiceUnavailable); }
+    }),
+    ("USB valid empty lists stay empty and do not negotiate unnecessarily", async () =>
+    {
+        await using var server = new ScriptedMuxService(async (stream, _, token) =>
+        {
+            var request = await ScriptedMuxService.ReadAsync(stream, token);
+            await ScriptedMuxService.SendXmlAsync(stream, request.Tag,
+                "<plist><dict><key>DeviceList</key><array/></dict></plist>", token);
+        });
+        True((await new UsbMuxClient(server.Port).ListAsync(default)).Count == 0);
+        True(server.ConnectionCount == 1);
+    }),
     ("Downloads publish verified ZIP without overwriting an existing file", async () =>
     {
         await WithFolder(async folder =>
@@ -292,6 +454,85 @@ sealed class FakeUsbService : IAsyncDisposable
         stop.Cancel(); listener.Stop(); await loop;
         Task[] tasks; lock (connections) tasks = connections.ToArray();
         try { await Task.WhenAll(tasks); } catch (OperationCanceledException) { }
+        stop.Dispose();
+    }
+}
+
+
+// This service encodes the wire fixtures independently of UsbMuxClient. In
+// particular, native v0 results/events never pass through the client's codec.
+sealed class ScriptedMuxService : IAsyncDisposable
+{
+    internal sealed record WirePacket(uint Version, uint Type, uint Tag, byte[] Body);
+    private readonly TcpListener listener = new(IPAddress.Loopback, 0);
+    private readonly CancellationTokenSource stop = new();
+    private readonly Func<NetworkStream, int, CancellationToken, Task> handler;
+    private readonly List<Task> connections = [];
+    private readonly Task loop;
+    private int count;
+    public int Port => ((IPEndPoint)listener.LocalEndpoint).Port;
+    public int ConnectionCount => Volatile.Read(ref count);
+    public ScriptedMuxService(Func<NetworkStream, int, CancellationToken, Task> handler)
+    {
+        this.handler = handler; listener.Start(); loop = AcceptAsync();
+    }
+    private async Task AcceptAsync()
+    {
+        try
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                var client = await listener.AcceptTcpClientAsync(stop.Token);
+                var number = Interlocked.Increment(ref count);
+                lock (connections) connections.Add(HandleAsync(client, number));
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+    private async Task HandleAsync(TcpClient client, int number)
+    {
+        using (client) await handler(client.GetStream(), number, stop.Token);
+    }
+    public static async Task<WirePacket> ReadAsync(NetworkStream stream, CancellationToken token)
+    {
+        var head = new byte[16]; await stream.ReadExactlyAsync(head, token);
+        var length = BinaryPrimitives.ReadUInt32LittleEndian(head);
+        if (length < 16 || length > 65536) throw new Exception("Invalid client request length.");
+        var body = new byte[length - 16]; await stream.ReadExactlyAsync(body, token);
+        return new(BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(4)), BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(8)), BinaryPrimitives.ReadUInt32LittleEndian(head.AsSpan(12)), body);
+    }
+    public static void ExpectPlist(WirePacket packet, string operation)
+    {
+        if (packet.Version != 1 || packet.Type != 8) throw new Exception("Expected plist request.");
+        var xml = System.Xml.Linq.XDocument.Parse(Encoding.UTF8.GetString(packet.Body));
+        var elements = xml.Root!.Element("dict")!.Elements().ToArray();
+        for (var i = 0; i + 1 < elements.Length; i += 2)
+            if (elements[i].Value == "MessageType" && elements[i + 1].Value == operation) return;
+        throw new Exception("Unexpected plist operation.");
+    }
+    public static Task SendXmlAsync(NetworkStream stream, uint tag, string xml, CancellationToken token)
+        => SendAsync(stream, 1, 8, tag, Encoding.UTF8.GetBytes(xml), token);
+    public static Task SendResultAsync(NetworkStream stream, uint tag, uint result, bool legacy, CancellationToken token)
+    {
+        if (!legacy) return SendXmlAsync(stream, tag, $"<plist><dict><key>MessageType</key><string>Result</string><key>Number</key><integer>{result}</integer></dict></plist>", token);
+        var bytes = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(bytes, result);
+        return SendAsync(stream, 0, 1, tag, bytes, token);
+    }
+    public static string AttachedXml(uint id)
+        => $"<plist><dict><key>MessageType</key><string>Attached</string><key>Properties</key><dict><key>DeviceID</key><integer>{id}</integer><key>ConnectionType</key><string>USB</string><key>SerialNumber</key><string>fixture-{id}</string></dict></dict></plist>";
+    public static async Task SendAsync(NetworkStream stream, uint version, uint type, uint tag, byte[] bytes, CancellationToken token)
+    {
+        var head = new byte[16]; BinaryPrimitives.WriteUInt32LittleEndian(head, (uint)bytes.Length + 16);
+        BinaryPrimitives.WriteUInt32LittleEndian(head.AsSpan(4), version); BinaryPrimitives.WriteUInt32LittleEndian(head.AsSpan(8), type);
+        BinaryPrimitives.WriteUInt32LittleEndian(head.AsSpan(12), tag);
+        await stream.WriteAsync(head, token); await stream.WriteAsync(bytes, token);
+    }
+    public async ValueTask DisposeAsync()
+    {
+        stop.Cancel(); listener.Stop(); await loop;
+        Task[] tasks; lock (connections) tasks = connections.ToArray();
+        foreach (var task in tasks)
+            try { await task; } catch (OperationCanceledException) { }
         stop.Dispose();
     }
 }

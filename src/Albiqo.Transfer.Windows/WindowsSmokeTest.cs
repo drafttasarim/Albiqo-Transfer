@@ -27,6 +27,17 @@ internal static class WindowsSmokeTest
                     form.Show(); form.PerformLayout(); Application.DoEvents();
                     var errors = new List<string>();
                     CheckBounds(form, errors);
+                    var setup = form.Controls.Find("UsbSetup", searchAllChildren: true).SingleOrDefault();
+                    if (setup is not Button || !setup.Visible || !setup.Enabled)
+                        errors.Add("USB prerequisite installer action must be visible and available before discovery.");
+                    var radios = Descendants(form).OfType<RadioButton>().ToArray();
+                    radios.Single(x => x.Text == "Bluetooth").Checked = true;
+                    Application.DoEvents();
+                    if (setup?.Visible != false) errors.Add("Apple USB setup action must be hidden in Bluetooth mode.");
+                    CheckBounds(form, errors);
+                    radios.Single(x => x.Text == "USB").Checked = true;
+                    Application.DoEvents();
+                    if (setup?.Visible != true) errors.Add("USB setup action must return when switching back to USB.");
                     var name = $"Albiqo-Transfer-{language}-{(minimum ? "minimum" : "default")}.png";
                     using (var bitmap = new Bitmap(form.Width, form.Height))
                     {
@@ -73,6 +84,15 @@ internal static class WindowsSmokeTest
         client = new { child.ClientSize.Width, child.ClientSize.Height },
         children = DescribeControls(child)
     }).ToArray();
+
+    private static IEnumerable<Control> Descendants(Control parent)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
+        }
+    }
 
     private static void CheckBounds(Control parent, List<string> errors)
     {

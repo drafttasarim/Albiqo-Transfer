@@ -10,6 +10,7 @@ public sealed class MainWindow : Form
     private static readonly Color Ink = Color.FromArgb(19, 17, 29), Panel = Color.FromArgb(35, 31, 48), Teal = Color.FromArgb(48, 210, 196), Gold = Color.FromArgb(255, 200, 96);
     private readonly RadioButton usb = new() { Text = "USB", Checked = true, Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, AutoSize = false, Width = 130, Height = 42 };
     private readonly RadioButton bluetooth = new() { Text = "Bluetooth", Appearance = Appearance.Button, TextAlign = ContentAlignment.MiddleCenter, AutoSize = false, Width = 150, Height = 42 };
+    private readonly Button usbSetup = new() { Name = "UsbSetup", AutoSize = false, Width = 230, Height = 42 };
     private readonly Button scan = new() { AutoSize = true };
     private readonly ComboBox devices = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 265 };
     private readonly TextBox code = new() { MaxLength = 6, Width = 110, UseSystemPasswordChar = true, PlaceholderText = "••••••" };
@@ -45,6 +46,8 @@ public sealed class MainWindow : Form
         connect.Text = T("Bağlan", "Connect"); disconnect.Text = T("Bağlantıyı kapat", "Disconnect");
         save.Text = T("Seçileni PC'ye kaydet", "Save selected to PC"); cancel.Text = T("Durdur", "Stop");
         openFolder.Text = T("Klasörü aç", "Open folder");
+        usbSetup.Text = T("Apple Devices'ı kur", "Install Apple Devices");
+        usbSetup.AccessibleDescription = T("USB için gereken Apple sürücüsünü Microsoft Store'dan kur. iTunes gerekmez.", "Install Apple's required USB driver from Microsoft Store. iTunes is not required.");
         save.BackColor = Teal; save.ForeColor = Ink;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(28), RowCount = 9, ColumnCount = 1 };
         layout.RowStyles.Add(new(SizeType.Absolute, 78));
@@ -61,7 +64,7 @@ public sealed class MainWindow : Form
         brand.Controls.Add(new Label { Text = T("Albümlerin, bilgisayarında.", "Your albums. On your PC."), AutoSize = true, ForeColor = Gold });
         layout.Controls.Add(brand, 0, 0);
         var transportRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        transportRow.Controls.AddRange([usb, bluetooth]);
+        transportRow.Controls.AddRange([usb, bluetooth, usbSetup]);
         layout.Controls.Add(transportRow, 0, 1);
         layout.Controls.Add(hint, 0, 2);
         var pairing = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
@@ -101,6 +104,12 @@ public sealed class MainWindow : Form
         disconnect.Click += async (_, _) => await RunAsync(async _ => await DisconnectAsync());
         save.Click += async (_, _) => await RunAsync(SaveAsync);
         cancel.Click += (_, _) => operation?.Cancel();
+        usbSetup.Click += async (_, _) => await RunAsync(_ =>
+        {
+            Process.Start(new ProcessStartInfo("https://apps.microsoft.com/detail/9NP83LWLPZ9K") { UseShellExecute = true });
+            status.Text = T("Apple Devices'ı kurduktan sonra kabloyu yeniden takıp Telefonları bul'a bas.", "After installing Apple Devices, reconnect the cable and click Find phones.");
+            return Task.CompletedTask;
+        });
         albums.SelectionChanged += (_, _) => RefreshEnabled();
         chooseFolder.Click += (_, _) => { using var dialog = new FolderBrowserDialog { SelectedPath = folder.Text, Description = T("Albiqo albümlerinin kaydedileceği klasör", "Choose where to save Albiqo albums"), UseDescriptionForTitle = true }; if (dialog.ShowDialog(this) == DialogResult.OK) folder.Text = dialog.SelectedPath; };
         openFolder.Click += async (_, _) => await RunAsync(_ => { Directory.CreateDirectory(folder.Text); Process.Start(new ProcessStartInfo("explorer.exe", folder.Text) { UseShellExecute = true }); return Task.CompletedTask; });
@@ -131,9 +140,13 @@ public sealed class MainWindow : Form
         await DisconnectAsync(); devices.Items.Clear(); UpdateHint();
     }
 
-    private void UpdateHint() => hint.Text = usb.Checked
-        ? T("Veri kablosunu bağla. iPhone'un kilidini açıp Güven'e dokun. Apple USB sürücüsü gerekir; aktarımı bu uygulama yapar.", "Connect a data cable. Unlock your iPhone and tap Trust. Apple's USB driver is required; this app handles the transfer.")
-        : T("Bluetooth'u aç. Telefonda Albiqo PC Aktarımı açık kalsın. Büyük albümler için USB daha hızlıdır.", "Turn Bluetooth on and keep Albiqo PC Transfer open. USB is faster for large albums.");
+    private void UpdateHint()
+    {
+        usbSetup.Visible = usb.Checked;
+        hint.Text = usb.Checked
+            ? T("İlk USB kullanımı: Apple Devices'ı kur (iTunes gerekmez). Veri kablosunu bağla, iPhone'un kilidini aç ve Güven'e dokun. Aktarımı Albiqo yapar.", "First USB use: install Apple Devices (no iTunes needed). Connect a data cable, unlock your iPhone and tap Trust. Albiqo handles the transfer.")
+            : T("Bluetooth'u aç. Telefonda Albiqo PC Aktarımı açık kalsın. Büyük albümler için USB daha hızlıdır.", "Turn Bluetooth on and keep Albiqo PC Transfer open. USB is faster for large albums.");
+    }
 
     private async Task ScanAsync(CancellationToken token)
     {
@@ -148,7 +161,11 @@ public sealed class MainWindow : Form
             foreach (var phone in await BluetoothArchiveTransport.FindAsync(token)) devices.Items.Add(new DeviceChoice(phone.Name, phone));
         }
         if (devices.Items.Count > 0) devices.SelectedIndex = 0;
-        status.Text = devices.Items.Count == 0 ? T("Telefon bulunamadı. Telefonda PC Aktarımı ekranını açıp tekrar dene.", "No phone found. Open PC Transfer on your phone and try again.") : T("Telefonundaki altı haneli kodu girip bağlan.", "Enter the six-digit code from your phone and connect.");
+        status.Text = devices.Items.Count == 0
+            ? usb.Checked
+                ? T("USB'de telefon yok. Apple Devices'ta göründüğünü ve veri kablosunu kontrol et; sonra yeniden ara.", "No USB phone found. Check the data cable and whether Apple Devices sees your phone, then scan again.")
+                : T("Telefon bulunamadı. Telefonda Bluetooth ve PC Aktarımı ekranını açıp tekrar dene.", "No phone found. Enable Bluetooth and open PC Transfer on your phone, then retry.")
+            : T("Telefonundaki altı haneli kodu girip bağlan.", "Enter the six-digit code from your phone and connect.");
     }
 
     private async Task ConnectAsync(CancellationToken token)
@@ -221,7 +238,7 @@ public sealed class MainWindow : Form
         catch (Exception error)
         {
             status.Text = T("İşlem tamamlanamadı.", "Could not complete the transfer.");
-            if (!closing) MessageBox.Show(this, error.Message, "Albiqo Transfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!closing) MessageBox.Show(this, ErrorText(error), "Albiqo Transfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         finally
         {
@@ -239,7 +256,23 @@ public sealed class MainWindow : Form
         disconnect.Enabled = idle && transport is not null;
         usb.Enabled = idle; bluetooth.Enabled = idle; devices.Enabled = idle; code.Enabled = idle;
         chooseFolder.Enabled = idle; save.Enabled = idle && transport is not null && albums.SelectedRows.Count > 0;
+        usbSetup.Enabled = idle;
         cancel.Enabled = operation is not null && !closing;
+    }
+
+    private string ErrorText(Exception error)
+    {
+        // HttpClient can wrap a failed USB connection in HttpRequestException.
+        UsbMuxException? usbError = null;
+        for (Exception? cause = error; cause is not null; cause = cause.InnerException)
+            if (cause is UsbMuxException failure) { usbError = failure; break; }
+        return usbError is not null ? usbError.Failure switch
+        {
+        UsbMuxFailure.ServiceUnavailable => T("Apple USB servisine ulaşılamıyor. Yukarıdaki Apple Devices'ı kur düğmesiyle kurulumu tamamla. Kuruluysa Apple Devices'ı açıp telefonu kontrol et; kabloyu yeniden tak ve tekrar ara. iTunes gerekmez.", "Apple's USB service is unavailable. Use Install Apple Devices above. If it is already installed, open Apple Devices to check your phone, reconnect the cable and scan again. iTunes is not required."),
+        UsbMuxFailure.ResponseTimeout => T("Apple USB servisi zamanında yanıt vermedi. Telefonun kilidini açık tut, kabloyu yeniden tak ve Telefonları bul'a bas. Apple Devices içinde de görünmüyorsa USB bağlantısını kontrol et.", "Apple's USB service did not respond in time. Keep your phone unlocked, reconnect the cable and click Find phones. Check the USB connection if Apple Devices cannot see it either."),
+        UsbMuxFailure.UnsupportedProtocol => T("Bu Apple USB servisiyle bağlantı kurulamadı. Apple Devices'ı güncelle ve yeniden dene.", "This Apple USB service could not be used. Update Apple Devices and try again."),
+        _ => error.Message
+        } : error.Message;
     }
 
     private async void OnFormClosing(object? sender, FormClosingEventArgs e)

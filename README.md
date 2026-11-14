@@ -2,6 +2,12 @@
 
 Albiqo'da hazırladığın albümleri kendi Windows uygulamamızla bilgisayarına kaydet. USB kablo veya Bluetooth seç; albüm adıyla hazırlanan ZIP'i istediğin klasöre al. ZIP açıldığında albümle aynı adlı klasör bulunur.
 
+## USB için önce bunu kur
+
+**Windows'ta ilk USB kullanımından önce [Apple Devices'ı Microsoft Store'dan kur](https://apps.microsoft.com/detail/9NP83LWLPZ9K).** Gereken Apple USB sürücüsü/servisi bu kurulumla gelir. **Ayrıca iTunes kurmak gerekmez.** Telefonda Güven'e basmak, bilgisayarda bu sürücünün bulunduğu anlamına gelmez.
+
+Kurulumdan sonra veri kablosunu yeniden tak, iPhone'un kilidini aç ve Apple Devices içinde telefonun göründüğünü kontrol et. Sonra Albiqo Transfer'da **Telefonları bul** düğmesine bas. Albümleri kaydetme ve aktarım işlemini Albiqo Transfer yapar; Apple Devices'tan elle dosya aktarmana gerek yok.
+
 [Windows indirme sayfası](https://github.com/drafttasarim/Albiqo-Transfer/releases) · [Kaynak kod](https://github.com/drafttasarim/Albiqo-Transfer)
 
 ## Ön sürüm durumu
@@ -12,7 +18,7 @@ GitHub Windows runner'ı `--smoke-test` ile Türkçe/İngilizce arayüzün norma
 
 ## Kullanım
 
-1. iPhone'da Albiqo ile albümü aktarım için hazırla ve **PC Aktarımı** ekranını aç.
+1. USB kullanacaksan önce yukarıdaki Apple Devices kurulumunu tamamla. iPhone'da Albiqo ile albümü aktarım için hazırla ve **PC Aktarımı** ekranını aç.
 2. Windows'ta Albiqo Transfer'i açıp **USB** veya **Bluetooth** seç.
 3. **Telefonları bul** düğmesine bas. Telefonunu seçip iPhone'daki altı haneli geçici kodu gir.
 4. **Bağlan** ile hazır albümleri gör. Kaydedilecek klasörü ve albümü/albümleri seç.
@@ -23,9 +29,11 @@ Aktarım durdurulursa eksik dosya saklanır. Aynı albüm ve aynı klasörle yen
 ### USB
 
 - Veri aktarabilen USB-C/Lightning kablosu kullan. iPhone'un kilidini açıp gerekiyorsa **Güven** onayını ver.
-- Windows'ta **Apple Mobile Device USB sürücüsü ve servisi gerekir**. Bu donanım sürücüsü olmadan kendi uygulamamız da iPhone'a USB tüneli açamaz.
+- Windows'ta **Apple Mobile Device USB sürücüsü ve servisi gerekir**. [Apple Devices'ı kur](https://apps.microsoft.com/detail/9NP83LWLPZ9K); ayrıca iTunes gerekmez. Bu donanım sürücüsü olmadan kendi uygulamamız da iPhone'a USB tüneli açamaz.
 - Apple'ın Windows aygıt desteğini kurduktan sonra Apple Devices uygulamasını açman veya Dosyalar ekranında elle işlem yapman gerekmez. Listeleme, indirme, devam etme ve doğrulamayı **Albiqo Transfer** yapar.
 - USB isteği localhost Apple usbmux servisine gider; Albiqo iPhone uygulamasındaki yalnız loopback üzerinde dinleyen aktarım sunucusuna tünellenir. LAN veya internete sunucu açılmaz.
+
+**Telefon bulunamıyorsa:** Önce Apple Devices'ın telefonu görüp görmediğini kontrol et. Orada da görünmüyorsa veri destekli kabloyu/USB girişini ve sürücü kurulumunu kontrol et. Apple Devices görüyorsa ama Albiqo göremiyorsa Albiqo Transfer'ın güncel ön sürümünü kullan. [Apple'ın USB tanıma rehberi](https://support.apple.com/en-us/108643).
 
 ### Bluetooth
 
