@@ -2,7 +2,7 @@
 
 Albiqo Transfer, kullanıcının seçtiği albümün orijinal fotoğraf ve video kaynaklarını iPhone'dan kendi Windows PC'sindeki albüm klasörüne kaydeder. Fotoğraf ve videolar bir Albiqo bulut sunucusuna yüklenmez. Uygulamada hesap, reklam SDK'sı, analitik SDK'sı veya uygulamaya ait telemetri gönderimi yoktur.
 
-USB iletişimi Windows'taki Apple aygıt servisi üzerinden telefonun yerel aktarım sunucusuna tünellenir. Bluetooth aktarımı şifreli BLE bağlantısı ve geçici altı haneli oturum kodu kullanır. Kod yalnız bellekte tutulur; diske veya günlüğe yazılmaz. Telefon aktarım oturumu veya bağlantı kapanınca erişim biter.
+USB iletişimi Windows'taki Apple aygıt servisi üzerinden telefonun yerel aktarım sunucusuna tünellenir. Bluetooth aktarımı şifreli BLE bağlantısı ve geçici altı haneli oturum kodu kullanır. Kod yalnız bellekte tutulur; diske veya günlüğe yazılmaz. Kod aynı fiziksel USB veya Bluetooth bağlantısı boyunca yalnız bellekte hatırlanır; aktarımı durdurmak veya albüm listesini yenilemek bu bilgiyi silmez. USB çıkarma, Bluetooth kopuşu, açık bağlantıyı kapatma, uygulama kapanışı veya telefonun kodu reddetmesi eşleştirmeyi temizler. Albüm ekranı kapalıyken medya sunulmaz; iPhone uygulamasının arka plana geçmesi ve telefon oturumunun süre sınırları kodu geçersizleştirir.
 
 Albüm adı, kaynak dosya adı, oluşturulma tarihi, kaynak kimliği/sürümü, alınan byte miktarı ve doğrulama için SHA-256 işlenir. Yalnız telefonda aktarım için açıkça seçilen albüm sunulur. Windows uygulaması telefonun tüm fotoğraf arşivine doğrudan erişmez; orijinalleri silmez. iCloud'daki kaynakların indirilmesini Apple Photos yönetir ve kendi sistem önbelleğini kullanabilir. Doğrudan aktarımda Albiqo telefonda albüm ZIP'i veya ikinci bir medya staging kopyası oluşturmaz.
 

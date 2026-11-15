@@ -16,15 +16,29 @@ public sealed record NearbyPhone(ulong Address, string Name)
 public sealed class BluetoothArchiveTransport : IArchiveTransport, IMediaTransport
 {
     private readonly BluetoothLEDevice device;
-    private readonly GattDeviceService service;
+    private GattDeviceService service;
     private readonly GattSession session;
-    private readonly GattCharacteristic rx;
-    private readonly GattCharacteristic tx;
+    private GattCharacteristic rx;
+    private GattCharacteristic tx;
+    private readonly BluetoothLinkLifetime link = new();
     private readonly SemaphoreSlim commandGate = new(1, 1);
     private readonly ConcurrentDictionary<uint, PendingResponse> pending = new();
     private int nextId;
-    private bool disposed;
+    private int disposed;
+    private long boundServiceRevision;
     public string DisplayName => "Bluetooth · " + device.Name;
+    public ulong BluetoothAddress => device.BluetoothAddress;
+    public CancellationToken ConnectionLost => link.ConnectionLost;
+    public bool IsConnectionActive
+    {
+        get
+        {
+            if (Volatile.Read(ref disposed) != 0 || !link.IsActive) return false;
+            try { return device.ConnectionStatus == BluetoothConnectionStatus.Connected; }
+            catch (Exception error) when (error is ObjectDisposedException or System.Runtime.InteropServices.COMException)
+            { link.End(); return false; }
+        }
+    }
     public int PreferredReadSize => Math.Clamp((session.MaxPduSize - 3 - BleProtocol.ResponseHeaderSize) * 32, 512, 16384);
 
     public int PreferredMediaChunkSize => PreferredReadSize;
@@ -40,6 +54,8 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport, IMediaTranspo
     {
         this.device = device; this.service = service; this.session = session; this.rx = rx; this.tx = tx;
         tx.ValueChanged += OnValueChanged;
+        device.ConnectionStatusChanged += OnConnectionStatusChanged;
+        device.GattServicesChanged += OnGattServicesChanged;
     }
 
     public static async Task<IReadOnlyList<NearbyPhone>> FindAsync(CancellationToken token)
@@ -103,6 +119,7 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport, IMediaTranspo
             transport = new(device, service, session, rx, tx);
             var status = await tx.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Notify).AsTask(token);
             if (status != GattCommunicationStatus.Success) throw new IOException("Cannot subscribe to encrypted Bluetooth transfer notifications.");
+            transport.RequireActiveConnection();
             return transport;
         }
         catch
@@ -120,6 +137,75 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport, IMediaTranspo
         var result = TransferJson.Decode<TransferSession>(bytes);
         if (result.ProtocolVersion is not (1 or 2)) throw new InvalidDataException("Update Albiqo Transfer to use this phone session.");
         return result;
+    }
+
+    /// <summary>
+    /// Rebind the Albiqo service after a different album is opened on the phone.
+    /// This retains the existing physical device/session; it never reconnects a lost link.
+    /// Call AuthenticateAsync again with the connection's remembered code afterwards.
+    /// </summary>
+    public async Task RefreshServiceAsync(CancellationToken token)
+    {
+        using var connected = CancellationTokenSource.CreateLinkedTokenSource(token, ConnectionLost);
+        try
+        {
+            await commandGate.WaitAsync(connected.Token);
+            try { await RefreshServiceCoreAsync(connected.Token); }
+            finally { commandGate.Release(); }
+        }
+        catch (OperationCanceledException error) when (!token.IsCancellationRequested && ConnectionLost.IsCancellationRequested)
+        { throw ConnectionEnded(error); }
+    }
+
+    private async Task RefreshServiceCoreAsync(CancellationToken token)
+    {
+        RequireActiveConnection();
+        var revision = link.ServiceRevision;
+        GattDeviceService? candidateService = null;
+        GattCharacteristic? candidateTx = null;
+        var subscribedCandidate = false;
+        try
+        {
+            var services = await device.GetGattServicesForUuidAsync(BleProtocol.Service, BluetoothCacheMode.Uncached).AsTask(token);
+            if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
+                throw new IOException("Open the PC Transfer screen in Albiqo and enable Bluetooth transfer, then refresh.");
+            candidateService = services.Services[0];
+            foreach (var unused in services.Services.Skip(1)) unused.Dispose();
+            var rxResult = await candidateService.GetCharacteristicsForUuidAsync(BleProtocol.Rx, BluetoothCacheMode.Uncached).AsTask(token);
+            var txResult = await candidateService.GetCharacteristicsForUuidAsync(BleProtocol.Tx, BluetoothCacheMode.Uncached).AsTask(token);
+            if (rxResult.Status != GattCommunicationStatus.Success || txResult.Status != GattCommunicationStatus.Success ||
+                rxResult.Characteristics.Count != 1 || txResult.Characteristics.Count != 1)
+                throw new IOException("The phone does not expose the Albiqo transfer service. Reopen PC Transfer and refresh.");
+            var candidateRx = rxResult.Characteristics[0];
+            candidateTx = txResult.Characteristics[0];
+            candidateRx.ProtectionLevel = GattProtectionLevel.EncryptionRequired;
+            candidateTx.ProtectionLevel = GattProtectionLevel.EncryptionRequired;
+            if (!ReferenceEquals(candidateTx, tx))
+            {
+                candidateTx.ValueChanged += OnValueChanged;
+                subscribedCandidate = true;
+            }
+            var status = await candidateTx.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Notify).AsTask(token);
+            if (status != GattCommunicationStatus.Success)
+                throw new IOException("Cannot subscribe to encrypted Bluetooth transfer notifications.");
+            RequireActiveConnection();
+            if (revision != link.ServiceRevision)
+                throw new IOException("The phone's transfer service changed while refreshing. Refresh again.");
+
+            var previousService = service;
+            var previousTx = tx;
+            service = candidateService; rx = candidateRx; tx = candidateTx;
+            boundServiceRevision = revision;
+            candidateService = null; candidateTx = null;
+            // An uncached query may reuse its wrapper; retain that single subscription.
+            if (!ReferenceEquals(previousTx, tx)) previousTx.ValueChanged -= OnValueChanged;
+            if (!ReferenceEquals(previousService, service)) previousService.Dispose();
+        }
+        finally
+        {
+            if (candidateTx is not null && subscribedCandidate) candidateTx.ValueChanged -= OnValueChanged;
+            if (candidateService is not null && !ReferenceEquals(candidateService, service)) candidateService.Dispose();
+        }
     }
 
     public async Task<ArchiveCatalogue> ListAsync(CancellationToken token)
@@ -158,33 +244,73 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport, IMediaTranspo
 
     private async Task<byte[]> RequestAsync(Func<uint, object> command, long offset, int length, bool expectFile, CancellationToken token, int minimumTimeoutSeconds = 30)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        await commandGate.WaitAsync(token);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        using var connected = CancellationTokenSource.CreateLinkedTokenSource(token, ConnectionLost);
+        try { await commandGate.WaitAsync(connected.Token); }
+        catch (OperationCanceledException error) when (!token.IsCancellationRequested && ConnectionLost.IsCancellationRequested)
+        { throw ConnectionEnded(error); }
         uint id = unchecked((uint)Interlocked.Increment(ref nextId));
         var response = new PendingResponse(id, offset, length);
         try
         {
+            RequireActiveConnection();
+            if (boundServiceRevision != link.ServiceRevision) await RefreshServiceCoreAsync(connected.Token);
             pending[id] = response;
             foreach (var packet in BleProtocol.CommandFragments(id, command(id), Math.Max(23, (int)session.MaxPduSize)))
             {
                 using var writer = new DataWriter();
                 writer.WriteBytes(packet);
-                var status = await rx.WriteValueAsync(writer.DetachBuffer(), GattWriteOption.WriteWithResponse).AsTask(token);
+                var status = await rx.WriteValueAsync(writer.DetachBuffer(), GattWriteOption.WriteWithResponse).AsTask(connected.Token);
                 if (status != GattCommunicationStatus.Success) throw new IOException("Bluetooth write failed. Keep Albiqo open and nearby.");
             }
             // The smallest ATT MTU leaves only6 data bytes per notification; allow real slow-radio sessions.
             var payload = Math.Max(6, session.MaxPduSize - 3 - BleProtocol.ResponseHeaderSize);
             var seconds = Math.Clamp(length / (double)payload * 0.15, minimumTimeoutSeconds, 600);
-            var result = await response.Completion.Task.WaitAsync(TimeSpan.FromSeconds(seconds), token);
+            var result = await response.Completion.Task.WaitAsync(TimeSpan.FromSeconds(seconds), connected.Token);
             if (result.Kind == 3)
             {
                 var error = TransferJson.Decode<RemoteError>(result.Bytes);
-                throw new IOException(error.Code == "unauthorized" ? "The session code is incorrect or expired." : "Albiqo: " + error.Message);
+                // Closing one album's engine does not revoke a live foreground pairing.
+                // A new engine will reject the cached code if its lease actually changed.
+                if (error.Code is "unauthorized" or "too_many_attempts")
+                    throw new PairingCodeRejectedException(error.Code == "unauthorized" ? "The session code is incorrect or expired." : "Albiqo: " + error.Message);
+                throw new IOException("Albiqo: " + error.Message);
             }
             if (result.Kind != (expectFile ? 2 : 1)) throw new InvalidDataException("The phone returned the wrong response type.");
             return result.Bytes;
         }
+        catch (OperationCanceledException error) when (!token.IsCancellationRequested && ConnectionLost.IsCancellationRequested)
+        { throw ConnectionEnded(error); }
         finally { pending.TryRemove(id, out _); commandGate.Release(); }
+    }
+
+    private void RequireActiveConnection()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        if (!IsConnectionActive)
+        {
+            link.End();
+            throw ConnectionEnded();
+        }
+    }
+
+    private static IOException ConnectionEnded(Exception? inner = null) =>
+        new("The Bluetooth connection ended. Find the phone and enter its code to reconnect.", inner);
+
+    private void OnConnectionStatusChanged(BluetoothLEDevice sender, object args)
+    {
+        if (Volatile.Read(ref disposed) != 0) return;
+        try { if (sender.ConnectionStatus == BluetoothConnectionStatus.Connected) return; }
+        catch (Exception error) when (error is ObjectDisposedException or System.Runtime.InteropServices.COMException) { }
+        link.ObserveConnection(false);
+        foreach (var response in pending.Values) response.Completion.TrySetException(ConnectionEnded());
+    }
+
+    private void OnGattServicesChanged(BluetoothLEDevice sender, object args)
+    {
+        link.ObserveServiceChange();
+        foreach (var response in pending.Values)
+            response.Completion.TrySetException(new IOException("The phone's album transfer service changed. Refresh the album list."));
     }
 
     private void OnValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
@@ -214,8 +340,10 @@ public sealed class BluetoothArchiveTransport : IArchiveTransport, IMediaTranspo
 
     public ValueTask DisposeAsync()
     {
-        if (disposed) return ValueTask.CompletedTask;
-        disposed = true;
+        if (Interlocked.Exchange(ref disposed, 1) != 0) return ValueTask.CompletedTask;
+        link.End();
+        device.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        device.GattServicesChanged -= OnGattServicesChanged;
         tx.ValueChanged -= OnValueChanged;
         foreach (var response in pending.Values) response.Completion.TrySetCanceled();
         session.MaintainConnection = false;

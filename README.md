@@ -24,6 +24,8 @@ GitHub Windows runner'ı `--smoke-test` ile Türkçe/İngilizce arayüzün norma
 4. **Bağlan** ile telefonda paylaşmayı seçtiğin albümü gör. Kaydedilecek PC klasörünü ve albümü seç.
 5. **Seçileni PC'ye kaydet** düğmesine bas. Her fotoğraf/video dosyası akış sırasında alınır, boyut ve SHA-256 doğrulamasından sonra albüm klasöründe görünür; mevcut dosyalar ezilmez.
 
+Kodunu ilk bağlantıda bir kez gir. USB kablosu veya aynı Bluetooth bağlantısı açıkken **Albümleri yenile** ve **Durdur** eşleştirmeyi silmez. Albüm değiştirdikten sonra yenileyerek kod girmeden devam edebilirsin; bu davranış için iPhone'da Albiqo **1.0.3 (15)+**, Windows'ta **0.2.1+** gerekir. Kablo çıkarıldığında, Bluetooth bağlantısı kesildiğinde, Bağlantıyı kapat seçildiğinde veya bilgisayar uygulaması kapatıldığında kod unutulur. Kod yalnız bellekte tutulur. iPhone uygulaması arka plana geçerse veya telefon oturumunun güvenlik süresi dolarsa güncel kodla yeniden eşleştirmek gerekir.
+
 Aktarım durdurulursa eksik dosya PC'de saklanır. Aynı albüm ve aynı klasörle yeniden bağlandığında aynı kaynak kimliği ve sürümü için kaldığı byte'tan devam eder. Daha önce tamamlanan dosyalar yeniden hash ile doğrulanıp atlanır; gereksiz ikinci kopya oluşturulmaz. Kullanıcı PC'deki dosyayı değiştirmişse o dosya korunur, yeni aktarım benzersiz adla kaydedilir. Orijinaller telefondan otomatik silinmez.
 
 Albüm klasörü kaynak adını korur; Windows'un izin vermediği karakterler güvenli hale getirilir. HEIC, JPEG, MOV ve Live Photo'nun eşlik eden kaynakları gibi dosyalar kendi uzantılarıyla saklanır. Aynı adlı kaynaklar `(2)`, `(3)` gibi eklerle korunur. Devam etme ve tamamlanma kayıtları PC'deki albüm klasörünün gizli `.albiqo-transfer` alt klasöründedir.

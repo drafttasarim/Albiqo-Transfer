@@ -4,7 +4,7 @@ using System.Globalization;
 
 namespace Albiqo.Transfer.Windows;
 
-public sealed class MainWindow : Form
+public sealed partial class MainWindow : Form
 {
     private readonly bool turkish = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "tr";
     private static readonly Color Ink = Color.FromArgb(19, 17, 29), Panel = Color.FromArgb(35, 31, 48), Teal = Color.FromArgb(48, 210, 196), Gold = Color.FromArgb(255, 200, 96);
@@ -28,6 +28,13 @@ public sealed class MainWindow : Form
     private readonly Button openFolder = new() { AutoSize = true };
     private CancellationTokenSource? operation;
     private IArchiveTransport? transport;
+    private ConnectionPairingCode? pairingCode;
+    private UsbAttachmentWatch? usbAttachment;
+    private CancellationToken connectionLost;
+    private CancellationTokenRegistration connectionLostRegistration;
+    private Guid connectionGeneration = Guid.NewGuid();
+    private string? sessionId;
+    private readonly System.Windows.Forms.Timer heartbeat = new() { Interval = 60_000 };
     private int protocolVersion = 1;
     private bool closing;
     private bool closeReady;
@@ -103,7 +110,11 @@ public sealed class MainWindow : Form
         bluetooth.CheckedChanged += (_, _) => { if (bluetooth.Checked) ChangeTransport(); };
         scan.Click += async (_, _) => await RunAsync(ScanAsync);
         connect.Click += async (_, _) => await RunAsync(ConnectAsync);
-        disconnect.Click += async (_, _) => await RunAsync(async _ => await DisconnectAsync());
+        disconnect.Click += async (_, _) => await RunAsync(async _ =>
+        {
+            await DisconnectAsync();
+            status.Text = T("Bağlantı kapatıldı. Yeniden bağlanırken kod istenir.", "Disconnected. A code is required to connect again.");
+        });
         save.Click += async (_, _) => await RunAsync(SaveAsync);
         cancel.Click += (_, _) => operation?.Cancel();
         usbSetup.Click += async (_, _) => await RunAsync(_ =>
@@ -113,6 +124,11 @@ public sealed class MainWindow : Form
             return Task.CompletedTask;
         });
         albums.SelectionChanged += (_, _) => RefreshEnabled();
+        heartbeat.Tick += async (_, _) =>
+        {
+            if (operation is null && transport is not null && pairingCode?.IsActive == true)
+                await RunAsync(token => RefreshConnectionAsync(token, refreshCatalogue: false), showErrors: false);
+        };
         chooseFolder.Click += (_, _) => { using var dialog = new FolderBrowserDialog { SelectedPath = folder.Text, Description = T("Albiqo albümlerinin kaydedileceği klasör", "Choose where to save Albiqo albums"), UseDescriptionForTitle = true }; if (dialog.ShowDialog(this) == DialogResult.OK) folder.Text = dialog.SelectedPath; };
         openFolder.Click += async (_, _) => await RunAsync(_ => { Directory.CreateDirectory(folder.Text); Process.Start(new ProcessStartInfo("explorer.exe", folder.Text) { UseShellExecute = true }); return Task.CompletedTask; });
         FormClosing += OnFormClosing;
@@ -139,7 +155,11 @@ public sealed class MainWindow : Form
     private async void ChangeTransport()
     {
         if (operation is not null) return;
-        await DisconnectAsync(); devices.Items.Clear(); UpdateHint();
+        await RunAsync(async _ =>
+        {
+            await DisconnectAsync(); devices.Items.Clear(); UpdateHint();
+            status.Text = T("Telefonunda aktarılacak albümü seçip telefonu bul.", "Choose an album on your phone, then find your phone.");
+        });
     }
 
     private void UpdateHint()
@@ -152,6 +172,11 @@ public sealed class MainWindow : Form
 
     private async Task ScanAsync(CancellationToken token)
     {
+        if (transport is not null && pairingCode?.IsActive == true)
+        {
+            await RefreshConnectionAsync(token, refreshCatalogue: true);
+            return;
+        }
         await DisconnectAsync(); devices.Items.Clear(); albums.Rows.Clear();
         status.Text = T("Telefon aranıyor…", "Looking for your phone…");
         if (usb.Checked)
@@ -174,44 +199,109 @@ public sealed class MainWindow : Form
     {
         if (devices.SelectedItem is not DeviceChoice choice) throw new InvalidOperationException(T("Önce telefonu bul.", "Find your phone first."));
         if (code.Text.Length != 6 || code.Text.Any(c => c is < '0' or > '9')) throw new InvalidOperationException(T("Telefonundaki altı haneli kodu gir.", "Enter the six-digit code from your phone."));
+        var enteredCode = code.Text;
         await DisconnectAsync();
         status.Text = T("Bağlanıyor…", "Connecting…");
-        var candidate = choice.Device switch
-        {
-            UsbDevice device => (IArchiveTransport)new UsbArchiveTransport(device),
-            NearbyPhone phone => await BluetoothArchiveTransport.ConnectAsync(phone, token),
-            _ => throw new InvalidOperationException("Unsupported phone.")
-        };
+        UsbAttachmentWatch? watch = null;
+        IArchiveTransport? candidate = null;
         try
         {
-            var session = await candidate.AuthenticateAsync(code.Text, token);
-            albums.Rows.Clear();
-            protocolVersion = session.ProtocolVersion;
-            ConfigureColumns(protocolVersion == 2);
-            if (protocolVersion == 2 && candidate is IMediaTransport media)
+            if (choice.Device is UsbDevice device)
             {
-                var catalogue = await media.CatalogueAsync(token);
-                foreach (var album in catalogue.Albums)
-                {
-                    var index = albums.Rows.Add(album.Name, album.AssetCount.ToString("N0"), album.FileCount.ToString("N0"));
-                    albums.Rows[index].Tag = album;
-                }
-                status.Text = T($"{session.DeviceName} bağlandı · doğrudan aktarım · {catalogue.Albums.Length} albüm", $"Connected to {session.DeviceName} · direct transfer · {catalogue.Albums.Length} albums");
+                watch = await new UsbMuxClient().WatchAttachmentAsync(device, token);
+                candidate = new UsbArchiveTransport(device);
             }
-            else
-            {
-                var catalogue = await candidate.ListAsync(token);
-                foreach (var archive in catalogue.Archives)
-                {
-                    var index = albums.Rows.Add(archive.AlbumName, SizeText(archive.Size), archive.CreatedAt.LocalDateTime.ToString("g"));
-                    albums.Rows[index].Tag = archive;
-                }
-                status.Text = T($"{session.DeviceName} bağlandı · eski sürüm uyumluluğu · {catalogue.Archives.Length} paket", $"Connected to {session.DeviceName} · legacy compatibility · {catalogue.Archives.Length} packages");
-            }
-            transport = candidate;
-            code.Clear();
+            else if (choice.Device is NearbyPhone phone)
+                candidate = await BluetoothArchiveTransport.ConnectAsync(phone, token);
+            else throw new InvalidOperationException("Unsupported phone.");
+            var lost = watch?.Disconnected ?? ((BluetoothArchiveTransport)candidate).ConnectionLost;
+            using var connectedOperation = CancellationTokenSource.CreateLinkedTokenSource(token, lost);
+            var session = await candidate.AuthenticateAsync(enteredCode, connectedOperation.Token);
+            await LoadCatalogueAsync(candidate, session, connectedOperation.Token);
+            lost.ThrowIfCancellationRequested();
+            RememberConnection(candidate, watch, lost, enteredCode, session);
         }
-        catch { await candidate.DisposeAsync(); throw; }
+        catch
+        {
+            if (candidate is not null) await candidate.DisposeAsync();
+            if (watch is not null) await watch.DisposeAsync();
+            throw;
+        }
+    }
+
+    private void RememberConnection(IArchiveTransport candidate, UsbAttachmentWatch? watch, CancellationToken lost, string enteredCode, TransferSession session)
+    {
+        transport = candidate;
+        usbAttachment = watch;
+        connectionLost = lost;
+        pairingCode = new ConnectionPairingCode(enteredCode, lost);
+        sessionId = session.SessionId;
+        var generation = connectionGeneration = Guid.NewGuid();
+        connectionLostRegistration = lost.Register(() =>
+        {
+            if (closing || IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke((Action)(async () =>
+            {
+                if (connectionGeneration != generation || closing) return;
+                if (operation is not null) { operation.Cancel(); return; }
+                await RunAsync(async _ =>
+                {
+                    await DisconnectAsync();
+                    status.Text = T("Telefon bağlantısı kesildi. Yeniden bağlanmak için kodu gir.", "Phone disconnected. Enter the code to connect again.");
+                }, showErrors: false);
+            })); }
+            catch (InvalidOperationException) { }
+        });
+        code.Clear();
+        code.PlaceholderText = T("Eşleşti", "Paired");
+        heartbeat.Start();
+    }
+
+    private async Task RefreshConnectionAsync(CancellationToken token, bool refreshCatalogue)
+    {
+        if (transport is null || pairingCode is null || !pairingCode.TryGet(out var pin))
+            throw new OperationCanceledException(connectionLost);
+        if (transport is BluetoothArchiveTransport bluetoothTransport && refreshCatalogue)
+            await bluetoothTransport.RefreshServiceAsync(token);
+        var session = await transport.AuthenticateAsync(pin, token);
+        // A newly selected album has a new engine, but the same foreground pairing lease.
+        if (refreshCatalogue || sessionId != session.SessionId)
+            await LoadCatalogueAsync(transport, session, token);
+        sessionId = session.SessionId;
+    }
+
+    private async Task LoadCatalogueAsync(IArchiveTransport candidate, TransferSession session, CancellationToken token)
+    {
+        var selectedIds = albums.SelectedRows.Cast<DataGridViewRow>().Select(row => row.Tag switch
+        {
+            MediaAlbum album => album.Id, ArchiveInfo archive => archive.Id, _ => ""
+        }).ToHashSet(StringComparer.Ordinal);
+        protocolVersion = session.ProtocolVersion;
+        ConfigureColumns(protocolVersion == 2);
+        if (protocolVersion == 2 && candidate is IMediaTransport media)
+        {
+            var catalogue = await media.CatalogueAsync(token);
+            albums.Rows.Clear();
+            foreach (var album in catalogue.Albums)
+            {
+                var index = albums.Rows.Add(album.Name, album.AssetCount.ToString("N0"), album.FileCount.ToString("N0"));
+                albums.Rows[index].Tag = album;
+                if (selectedIds.Count > 0) albums.Rows[index].Selected = selectedIds.Contains(album.Id);
+            }
+            status.Text = T($"{session.DeviceName} bağlandı · {catalogue.Albums.Length} albüm · kod bu bağlantıda hatırlanır", $"Connected to {session.DeviceName} · {catalogue.Albums.Length} albums · code remembered for this connection");
+        }
+        else
+        {
+            var catalogue = await candidate.ListAsync(token);
+            albums.Rows.Clear();
+            foreach (var archive in catalogue.Archives)
+            {
+                var index = albums.Rows.Add(archive.AlbumName, SizeText(archive.Size), archive.CreatedAt.LocalDateTime.ToString("g"));
+                albums.Rows[index].Tag = archive;
+                if (selectedIds.Count > 0) albums.Rows[index].Selected = selectedIds.Contains(archive.Id);
+            }
+            status.Text = T($"{session.DeviceName} bağlandı · eski sürüm uyumluluğu · {catalogue.Archives.Length} paket", $"Connected to {session.DeviceName} · legacy compatibility · {catalogue.Archives.Length} packages");
+        }
     }
 
     private async Task SaveAsync(CancellationToken token)
@@ -279,31 +369,59 @@ public sealed class MainWindow : Form
 
     private async Task DisconnectAsync()
     {
+        connectionGeneration = Guid.NewGuid(); heartbeat.Stop();
+        connectionLostRegistration.Dispose();
+        pairingCode?.Dispose(); pairingCode = null;
+        var watch = usbAttachment; usbAttachment = null;
         var previous = transport; transport = null; protocolVersion = 1; ConfigureColumns(false);
+        sessionId = null; connectionLost = CancellationToken.None;
+        code.Clear(); code.PlaceholderText = "••••••";
         if (previous is not null) await previous.DisposeAsync();
+        if (watch is not null) await watch.DisposeAsync();
         albums.Rows.Clear(); RefreshEnabled();
     }
 
-    private async Task RunAsync(Func<CancellationToken, Task> action)
+    private async Task RunAsync(Func<CancellationToken, Task> action, bool showErrors = true)
     {
         if (operation is not null || closing) return;
-        operation = new CancellationTokenSource(); RefreshEnabled();
+        operation = CancellationTokenSource.CreateLinkedTokenSource(connectionLost); RefreshEnabled();
         try { await action(operation.Token); }
         catch (OperationCanceledException)
         {
+            if (transport is not null && pairingCode?.IsActive == true)
+                status.Text = T("Durduruldu. Bağlantın açık; kod girmeden devam edebilirsin.", "Stopped. Still connected; resume without entering the code again.");
+            else
+            {
+                await DisconnectAsync();
+                status.Text = T("Bağlantı kapandı. Telefonu bulup kodla yeniden bağlan.", "Connection closed. Find your phone and enter its code again.");
+            }
+        }
+        catch (PairingCodeRejectedException error)
+        {
             await DisconnectAsync();
-            status.Text = T("Durduruldu. Yeniden bağlanınca eksik dosyadan devam edebilirsin.", "Stopped. Reconnect to resume the partial download.");
+            status.Text = T("Telefon yeni bir eşleştirme istiyor. Ekranındaki güncel kodu gir.", "Your phone needs a new pairing. Enter its current code.");
+            if (showErrors && !closing) MessageBox.Show(this, error.Message, "Albiqo Transfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception error)
         {
-            status.Text = T("İşlem tamamlanamadı.", "Could not complete the transfer.");
-            if (!closing) MessageBox.Show(this, ErrorText(error), "Albiqo Transfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            status.Text = pairingCode?.IsActive == true
+                ? T("Telefonda albümün aktarım ekranını açıp Albümleri yenile'ye bas. Eşleştirmen korunuyor.", "Open the album's transfer screen on your phone, then refresh albums. Your pairing is kept.")
+                : T("İşlem tamamlanamadı.", "Could not complete the transfer.");
+            if (showErrors && !closing) MessageBox.Show(this, ErrorText(error), "Albiqo Transfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         finally
         {
             operation.Dispose(); operation = null;
             if (closing) { await DisconnectAsync(); closeReady = true; Close(); }
-            else RefreshEnabled();
+            else
+            {
+                if (transport is not null && pairingCode?.IsActive != true)
+                {
+                    await DisconnectAsync();
+                    status.Text = T("Telefon bağlantısı kesildi. Yeniden bağlanmak için kodu gir.", "Phone disconnected. Enter the code to connect again.");
+                }
+                RefreshEnabled();
+            }
         }
     }
 
@@ -312,8 +430,10 @@ public sealed class MainWindow : Form
         if (IsDisposed) return;
         var idle = operation is null && !closing;
         scan.Enabled = idle; connect.Enabled = idle && transport is null;
+        scan.Text = transport is null ? T("Telefonları bul", "Find phones") : T("Albümleri yenile", "Refresh albums");
+        connect.Text = transport is null ? T("Bağlan", "Connect") : T("Bağlandı", "Connected");
         disconnect.Enabled = idle && transport is not null;
-        usb.Enabled = idle; bluetooth.Enabled = idle; devices.Enabled = idle; code.Enabled = idle;
+        usb.Enabled = idle; bluetooth.Enabled = idle; devices.Enabled = idle && transport is null; code.Enabled = idle && transport is null;
         chooseFolder.Enabled = idle; save.Enabled = idle && transport is not null && albums.SelectedRows.Count > 0;
         usbSetup.Enabled = idle;
         cancel.Enabled = operation is not null && !closing;
@@ -337,7 +457,7 @@ public sealed class MainWindow : Form
     private async void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
         if (closeReady) return;
-        e.Cancel = true; closing = true;
+        e.Cancel = true; closing = true; heartbeat.Stop();
         if (operation is not null) { operation.Cancel(); return; }
         await DisconnectAsync(); closeReady = true; Close();
     }

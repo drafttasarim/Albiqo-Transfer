@@ -20,3 +20,13 @@ Bu liste tamamlanmadan uygulama donanımda doğrulanmış kararlı sürüm sayı
 - [ ] iOS uygulaması arka plana alınca oturum kapanır; eski kod artık çalışmaz.
 - [ ] Aktarım sonunda telefon arşivinden hiçbir fotoğraf/video silinmediği doğrulanır.
 
+
+## Aynı bağlantıda eşleştirme — 0.2.1 / iOS build15
+
+- [ ] USB ve Bluetooth: bir kez kod gir, yenile/durdur/devam et ve albüm değiştir; kod yeniden istenmesin.
+- [ ] USB: hızlı çıkarıp tekrar tak; eski eşleştirme canlanmasın, kod yeniden istensin.
+- [ ] Bluetooth: kapat/aç veya kapsama dışına çık; aynı cihaz yeniden bağlansa da kod istensin.
+- [ ] Başka USB cihazını çıkarmak mevcut telefonun eşleştirmesini bozmasın.
+- [ ] Telefon uygulamasını arka plana al; kod geçersizleşsin ve PC bunu temizlesin.
+- [ ] Transfer ekranı kapalıyken hiçbir albüm veya medya aktarılamasın.
+- [ ] Kod diskte, ayarlarda veya günlüklerde bulunmasın.

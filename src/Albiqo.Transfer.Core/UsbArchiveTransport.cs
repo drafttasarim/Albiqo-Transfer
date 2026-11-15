@@ -123,11 +123,16 @@ public sealed class UsbArchiveTransport : IArchiveTransport, IMediaTransport
     private static Task CheckStatusAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
+            throw new PairingCodeRejectedException(response.StatusCode == HttpStatusCode.TooManyRequests
+                ? "Too many attempts. Start a new transfer session on your phone."
+                : "The session code is incorrect or expired. Enter the current code from your phone.");
         if (!response.IsSuccessStatusCode)
             throw new IOException(response.StatusCode switch
             {
                 HttpStatusCode.Unauthorized => "The session code is incorrect or expired.",
                 HttpStatusCode.TooManyRequests => "Too many attempts. Start a new transfer session on your phone.",
+                HttpStatusCode.Forbidden => "Open an album's PC Transfer screen on your phone, then refresh albums.",
                 HttpStatusCode.NotFound => "This prepared album is no longer available.",
                 _ => $"The phone could not complete the request ({(int)response.StatusCode})."
             });

@@ -55,6 +55,19 @@ internal static class WindowsSmokeTest
                         bitmap.Save(Path.Combine(outputDirectory, directName), System.Drawing.Imaging.ImageFormat.Png);
                     }
                     results.Add(new { language, minimum, direct = true, errors, controls = DescribeControls(form), screenshot = directName });
+                    if (!minimum)
+                    {
+                        var pairedName = $"Albiqo-Transfer-paired-{language}-default.png";
+                        var pairing = Pump(form.CheckPairingLifecycleSmokeAsync(() =>
+                        {
+                            form.PerformLayout(); Application.DoEvents();
+                            CheckBounds(form, errors);
+                            using var bitmap = new Bitmap(form.Width, form.Height);
+                            form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
+                            bitmap.Save(Path.Combine(outputDirectory, pairedName), System.Drawing.Imaging.ImageFormat.Png);
+                        }));
+                        results.Add(new { language, minimum, pairingLifecycle = true, fixture = "production UI controller with an in-memory simulated phone; no hardware connection", pairing, errors, screenshot = pairedName });
+                    }
                     form.Hide();
                     failures.AddRange(errors.Select(error => $"{language}/{(minimum ? "minimum" : "default")}: {error}"));
                 }
@@ -69,6 +82,20 @@ internal static class WindowsSmokeTest
             WriteReport(outputDirectory, "failed", error.ToString(), results);
             return 1;
         }
+    }
+
+    // The runner has an STA UI thread but no Application.Run loop. Keep the actual
+    // WinForms continuations/buttons/BeginInvoke callbacks moving while awaiting the fixture.
+    private static T Pump<T>(Task<T> work)
+    {
+        var wait = System.Diagnostics.Stopwatch.StartNew();
+        while (!work.IsCompleted)
+        {
+            if (wait.Elapsed > TimeSpan.FromSeconds(15)) throw new TimeoutException("Windows pairing lifecycle smoke check timed out.");
+            Application.DoEvents();
+            Thread.Sleep(10);
+        }
+        return work.GetAwaiter().GetResult();
     }
 
     internal static int RecordStartupFailure(string outputDirectory, Exception error)

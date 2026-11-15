@@ -330,7 +330,8 @@ var tests = new (string Name, Func<Task> Body)[]
         });
     })
 };
-tests = tests.Concat(MediaTransferChecks.All).Concat(MediaWireChecks.All).ToArray();
+tests = tests.Concat(MediaTransferChecks.All).Concat(MediaWireChecks.All)
+    .Concat(ConnectionPairingChecks.All).Concat(BluetoothLinkChecks.All).Concat(UsbAttachmentChecks.All).ToArray();
 var failures = 0;
 foreach (var (name, body) in tests)
 {

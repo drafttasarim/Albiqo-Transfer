@@ -8,8 +8,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>../../assets/Albiqo.ico</ApplicationIcon>
     <AssemblyName>AlbiqoTransfer</AssemblyName>
-    <Version>0.2.0</Version>
-    <InformationalVersion>0.2.0-preview</InformationalVersion>
+    <Version>0.2.1</Version>
+    <InformationalVersion>0.2.1-preview</InformationalVersion>
     <Product>Albiqo Transfer</Product>
     <Company>Draft Tasarım</Company>
     <PublishTrimmed>false</PublishTrimmed>

@@ -14,7 +14,7 @@ public sealed class UsbMuxException(UsbMuxFailure failure, string message, Excep
     public UsbMuxFailure Failure { get; } = failure;
 }
 
-public sealed class UsbMuxClient
+public sealed partial class UsbMuxClient
 {
     public const int PhonePort = 52783;
     private readonly int servicePort;
