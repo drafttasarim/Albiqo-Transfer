@@ -7,6 +7,26 @@ internal static class UsbAttachmentChecks
     private static readonly UsbDevice Phone = new(71, "fixture-71", "Test iPhone");
     public static IEnumerable<(string Name, Func<Task> Body)> All => new (string, Func<Task>)[]
     {
+        ("USB test daemon shutdown remains bounded during accept completion", async () =>
+        {
+            // Exercise the race from the Windows runner: accept a short-lived
+            // connection, then stop while the loop prepares its next accept.
+            for (var attempt = 0; attempt < 32; attempt++)
+            {
+                var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var server = new ScriptedMuxService((_, _, _) =>
+                {
+                    accepted.TrySetResult(); return Task.CompletedTask;
+                });
+                try
+                {
+                    using var connection = new System.Net.Sockets.TcpClient();
+                    await connection.ConnectAsync(System.Net.IPAddress.Loopback, server.Port);
+                    await accepted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                }
+                finally { await server.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2)); }
+            }
+        }),
         ("USB authorization watches the target attachment and ignores other phones", async () =>
         {
             var detach = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

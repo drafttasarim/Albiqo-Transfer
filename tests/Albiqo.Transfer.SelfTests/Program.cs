@@ -397,7 +397,9 @@ sealed class FakeUsbService : IAsyncDisposable
                 lock (connections) connections.Add(HandleAsync(client));
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        catch (ObjectDisposedException) when (stop.IsCancellationRequested) { }
+        catch (SocketException) when (stop.IsCancellationRequested) { }
     }
     private async Task HandleAsync(TcpClient client)
     {
@@ -489,7 +491,12 @@ sealed class ScriptedMuxService : IAsyncDisposable
                 lock (connections) connections.Add(HandleAsync(client, number));
             }
         }
-        catch (OperationCanceledException) { }
+        // Windows may dispose the listening SafeSocketHandle between the loop's
+        // cancellation check and AcceptAsync. Suppress only our own shutdown;
+        // unexpected accept failures must still fail the fixture/test.
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        catch (ObjectDisposedException) when (stop.IsCancellationRequested) { }
+        catch (SocketException) when (stop.IsCancellationRequested) { }
     }
     private async Task HandleAsync(TcpClient client, int number)
     {
